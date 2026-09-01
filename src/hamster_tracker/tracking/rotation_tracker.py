@@ -50,13 +50,23 @@ class RotationTracker:
     def equivalent_revolutions(self) -> float:
         return self.angular_travel_rad / TAU
 
+    def reinitialize_phase(self, x_px: float, y_px: float, timestamp: float) -> RotationSample:
+        """Set the observable wheel phase without changing accumulated distance.
+
+        This is used after startup or a long/ambiguous marker occlusion. We know where
+        the marker is now, but we intentionally do not guess how many turns occurred
+        while it was unobservable.
+        """
+        angle = self.geometry.angle_of(x_px, y_px)
+        self._previous_angle = angle
+        self._previous_timestamp = timestamp
+        return self._sample(timestamp, True, "reinitialized", angle, 0.0, 0.0)
+
     def update(self, x_px: float, y_px: float, timestamp: float) -> RotationSample:
         angle = self.geometry.angle_of(x_px, y_px)
 
         if self._previous_angle is None:
-            self._previous_angle = angle
-            self._previous_timestamp = timestamp
-            return self._sample(timestamp, True, "initialized", angle, 0.0, 0.0)
+            return self.reinitialize_phase(x_px, y_px, timestamp)
 
         assert self._previous_timestamp is not None
         dt = timestamp - self._previous_timestamp
