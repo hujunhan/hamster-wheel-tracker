@@ -2,6 +2,29 @@
 
 This document covers the persistent service layer. Camera bring-up is intentionally separate so the service can already be developed and tested without Jetson hardware.
 
+## Jetson Nano compatibility note
+
+The original Jetson Nano is officially capped at the JetPack 4 series. NVIDIA's final Nano release is JetPack 4.6.6 / Jetson Linux R32.7.6, whose root filesystem is based on Ubuntu 18.04. Ubuntu 18.04 uses Python 3.6 as its default Python 3 runtime.
+
+The current project intentionally still declares Python >= 3.8. Therefore **the stock JetPack 4 Python is not yet a supported deployment target**.
+
+Do not replace `/usr/bin/python3` on a Jetson simply to satisfy this project. NVIDIA camera/OpenCV/GStreamer packages can depend on the system Python ABI. The installer checks the selected interpreter and stops before changing the system when it is too old.
+
+Once the physical Nano is available, first record:
+
+```bash
+python3 --version
+cat /etc/nv_tegra_release
+python3 -c 'import cv2; print(cv2.__version__)'
+```
+
+Then choose one of two strategies based on the actual image and camera stack:
+
+1. add a deliberately pinned Python 3.6 compatibility profile for JetPack 4, or
+2. use a separate Python >= 3.8 interpreter while proving that the CSI/GStreamer capture path still works correctly.
+
+Until that hardware check is done, the runtime/service code remains useful and fully testable on modern Python, but the installer will fail closed on Python < 3.8 rather than risking the Jetson system environment.
+
 ## Runtime layout
 
 The recommended installed layout keeps source code and persistent state separate:
@@ -60,21 +83,29 @@ Relative database paths from `config.json` are resolved relative to the config f
 
 ## Systemd installation
 
-On the Jetson, clone the repository as the normal login user and enter the checkout. Then run:
+On a compatible Python >= 3.8 system, clone the repository as the normal login user and enter the checkout. Then run:
 
 ```bash
 sudo bash deploy/install_service.sh --user "$USER"
 ```
 
+To select a non-default interpreter explicitly:
+
+```bash
+sudo env PYTHON_BIN=/path/to/python3.8 \
+  bash deploy/install_service.sh --user "$USER"
+```
+
 The installer:
 
-1. creates `/var/lib/hamster-wheel-tracker` owned by the selected user,
-2. creates `.venv` with `--system-site-packages`,
-3. installs the project in editable mode,
-4. creates a persistent initial config if one does not already exist,
-5. creates `/etc/default/hamster-wheel-tracker` on first install,
-6. renders `/etc/systemd/system/hamster-wheel-tracker.service`, and
-7. enables and starts the service.
+1. validates that the selected Python is >= 3.8,
+2. creates `/var/lib/hamster-wheel-tracker` owned by the selected user,
+3. creates `.venv` with `--system-site-packages`,
+4. installs the project in editable mode,
+5. creates a persistent initial config if one does not already exist,
+6. creates `/etc/default/hamster-wheel-tracker` on first install,
+7. renders `/etc/systemd/system/hamster-wheel-tracker.service`, and
+8. enables and starts the service.
 
 `--system-site-packages` is deliberate: Jetson images commonly provide hardware-integrated packages such as OpenCV through the system Python. The installer does not force-install the optional `vision` extra.
 
@@ -178,8 +209,8 @@ The MVP has no authentication layer. Binding to `0.0.0.0` is intended for a trus
 
 These deployment pieces are testable in CI, but the following acceptance checks require the actual Jetson Nano:
 
+- choose/validate the Python strategy for its actual JetPack image,
 - service starts after a physical reboot,
-- Jetson's installed Python can create/use the venv,
 - the eventual CSI camera worker can access the camera under the systemd user,
 - low-light capture remains stable overnight,
 - dashboard is reachable from the phone on the real LAN,
