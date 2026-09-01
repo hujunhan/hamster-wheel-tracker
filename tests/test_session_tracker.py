@@ -43,3 +43,22 @@ def test_force_flush_returns_open_session():
     session = tracker.flush(1.0, force=True)
     assert session is not None
     assert session.distance_m == pytest.approx(0.2)
+
+
+def test_pause_does_not_count_as_moving_time():
+    tracker = SessionTracker(
+        start_speed_m_s=0.05,
+        stop_speed_m_s=0.02,
+        stop_hold_seconds=1.0,
+        session_gap_seconds=10.0,
+    )
+    tracker.update(0.0, 0.2, 0.0, 0.0)
+    tracker.update(1.0, 0.2, 0.2, math.pi)
+    tracker.update(2.0, 0.0, 0.0, 0.0)
+    tracker.update(3.0, 0.0, 0.0, 0.0)
+    tracker.update(4.0, 0.2, 0.2, math.pi)
+    session = tracker.flush(4.0, force=True)
+
+    assert session is not None
+    assert session.moving_duration_s == pytest.approx(2.0)
+    assert session.avg_speed_m_s == pytest.approx(0.2)
