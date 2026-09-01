@@ -125,14 +125,40 @@ python scripts/simulate_night.py --overwrite
 
 The simulator exercises forward running, stops, direction reversal, pixel jitter, short marker occlusion, and a deliberately ambiguous long occlusion. It passes observations through the same `TrackerEngine`, session logic, one-second aggregation, and SQLite persistence intended for the real camera pipeline.
 
-To inspect the generated database through the current web API/dashboard skeleton:
+Start the mobile dashboard against the generated database:
 
 ```bash
 HAMSTER_TRACKER_DB=data/synthetic-night.db \
 uvicorn hamster_tracker.web.app:app --host 0.0.0.0 --port 8000
 ```
 
-Then open `http://<computer-ip>:8000` from a browser on the same network.
+Then open `http://<computer-ip>:8000` from a phone or browser on the same network.
+
+The dashboard currently includes:
+
+- current tracker/running state
+- current-night distance and moving time
+- equivalent revolutions
+- average and maximum speed
+- longest session and session count
+- distance-by-hour chart
+- speed timeline
+- session list
+- recent-night history
+- explicit warning for intervals where tracking was `UNCERTAIN`
+
+A reporting **night** currently runs from local **18:00 to 18:00 the next day**. This prevents a single overnight hamster session from being split at midnight. The rollover hour can become a user setting later.
+
+Useful JSON endpoints include:
+
+```text
+GET /api/dashboard
+GET /api/dashboard?night=YYYY-MM-DD
+GET /api/status
+GET /api/history?days=7
+GET /api/sessions
+GET /api/health
+```
 
 ## Development Milestones
 
@@ -171,15 +197,14 @@ Then open `http://<computer-ip>:8000` from a browser on the same network.
 - SQLite schema
 - One-second (or similar) aggregation
 - Session records
-- Daily summaries
+- nightly summaries
 
 ### M5 - Calibration and Mobile Web UI
 
+- Mobile current-night dashboard (hardware-independent path implemented)
+- Night/session history (hardware-independent path implemented)
 - Camera preview
 - Interactive calibration
-- Current-night dashboard
-- Daily history
-- Session history
 
 ### M6 - Jetson Deployment
 
@@ -190,6 +215,6 @@ Then open `http://<computer-ip>:8000` from a browser on the same network.
 
 ## Project Status
 
-Hardware-independent core implementation is in progress. Camera bring-up and real low-light calibration remain hardware-dependent.
+The hardware-independent tracker, synthetic simulator, SQLite persistence, API, and mobile dashboard are implemented on the current feature branch. Camera bring-up, real low-light marker tuning, and browser calibration preview remain hardware-dependent.
 
 See [`docs/design.md`](docs/design.md) for the detailed MVP design and engineering decisions.
