@@ -148,3 +148,6 @@ class Database:
             (start_ts, end_ts, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def activity_count(self) -> int:
+        return int(self.connection.execute("SELECT COUNT(*) FROM activity_samples").fetchone()[0])
