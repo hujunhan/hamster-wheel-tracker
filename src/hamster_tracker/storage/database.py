@@ -17,6 +17,7 @@ class ActivitySample:
     running: bool
     tracking_state: str = "TRACKING"
     detection_quality: Optional[float] = None
+    moving_duration_s: Optional[float] = None
 
 
 class Database:
@@ -44,7 +45,8 @@ class Database:
                 speed_m_s REAL NOT NULL,
                 running INTEGER NOT NULL,
                 tracking_state TEXT NOT NULL,
-                detection_quality REAL
+                detection_quality REAL,
+                moving_duration_s REAL NOT NULL DEFAULT 0.0
             );
 
             CREATE INDEX IF NOT EXISTS idx_activity_timestamp
@@ -66,16 +68,30 @@ class Database:
             ON sessions(start_ts);
             """
         )
+        columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(activity_samples)")
+        }
+        if "moving_duration_s" not in columns:
+            self.connection.execute(
+                "ALTER TABLE activity_samples "
+                "ADD COLUMN moving_duration_s REAL NOT NULL DEFAULT 0.0"
+            )
         self.connection.commit()
 
     def insert_activity(self, sample: ActivitySample) -> None:
+        moving_duration = (
+            sample.moving_duration_s
+            if sample.moving_duration_s is not None
+            else (sample.interval_s if sample.running else 0.0)
+        )
         self.connection.execute(
             """
             INSERT INTO activity_samples (
                 timestamp, interval_s, distance_delta_m, signed_angle_delta_rad,
                 angular_travel_delta_rad, speed_m_s, running, tracking_state,
-                detection_quality
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                detection_quality, moving_duration_s
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sample.timestamp,
@@ -87,6 +103,7 @@ class Database:
                 int(sample.running),
                 sample.tracking_state,
                 sample.detection_quality,
+                moving_duration,
             ),
         )
         self.connection.commit()
@@ -119,7 +136,7 @@ class Database:
             SELECT
                 COALESCE(SUM(distance_delta_m), 0.0) AS distance_m,
                 COALESCE(SUM(angular_travel_delta_rad), 0.0) AS angular_travel_rad,
-                COALESCE(SUM(CASE WHEN running = 1 THEN interval_s ELSE 0 END), 0.0) AS moving_duration_s,
+                COALESCE(SUM(moving_duration_s), 0.0) AS moving_duration_s,
                 COALESCE(MAX(speed_m_s), 0.0) AS max_speed_m_s
             FROM activity_samples
             WHERE timestamp >= ? AND timestamp < ?
@@ -150,4 +167,6 @@ class Database:
         return [dict(row) for row in rows]
 
     def activity_count(self) -> int:
-        return int(self.connection.execute("SELECT COUNT(*) FROM activity_samples").fetchone()[0])
+        return int(
+            self.connection.execute("SELECT COUNT(*) FROM activity_samples").fetchone()[0]
+        )
