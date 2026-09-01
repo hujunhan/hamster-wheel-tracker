@@ -113,6 +113,27 @@ Calibration should be performed under lighting similar to actual nighttime opera
 
 React and neural-network inference are intentionally out of scope for the MVP.
 
+## Development Without Camera Hardware
+
+The tracking/storage path can be developed and tested with synthetic marker trajectories before the Jetson camera is available.
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest -q
+python scripts/simulate_night.py --overwrite
+```
+
+The simulator exercises forward running, stops, direction reversal, pixel jitter, short marker occlusion, and a deliberately ambiguous long occlusion. It passes observations through the same `TrackerEngine`, session logic, one-second aggregation, and SQLite persistence intended for the real camera pipeline.
+
+To inspect the generated database through the current web API/dashboard skeleton:
+
+```bash
+HAMSTER_TRACKER_DB=data/synthetic-night.db \
+uvicorn hamster_tracker.web.app:app --host 0.0.0.0 --port 8000
+```
+
+Then open `http://<computer-ip>:8000` from a browser on the same network.
+
 ## Development Milestones
 
 ### M0 - Camera and Geometry
@@ -169,6 +190,6 @@ React and neural-network inference are intentionally out of scope for the MVP.
 
 ## Project Status
 
-Planning / initial implementation.
+Hardware-independent core implementation is in progress. Camera bring-up and real low-light calibration remain hardware-dependent.
 
 See [`docs/design.md`](docs/design.md) for the detailed MVP design and engineering decisions.
