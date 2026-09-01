@@ -70,6 +70,7 @@ def test_engine_pipeline_matches_synthetic_motion_without_occlusion():
     summary = db.summary(0.0, 20.0)
     assert summary["distance_m"] == pytest.approx(expected_distance, rel=1e-5)
     assert summary["equivalent_revolutions"] == pytest.approx(2.5, rel=1e-5)
+    assert summary["moving_duration_s"] == pytest.approx(3.0, abs=0.06)
     assert db.activity_count() >= 6
     assert len(db.sessions(0.0, 20.0)) >= 1
 
