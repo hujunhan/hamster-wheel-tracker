@@ -86,7 +86,7 @@ class SessionTracker:
             self._distance_m += max(0.0, distance_delta_m)
             self._angular_travel_rad += max(0.0, angular_travel_delta_rad)
             self._max_speed_m_s = max(self._max_speed_m_s, max(0.0, speed_m_s))
-            if self.running:
+            if distance_delta_m > 0.0:
                 self._moving_duration_s += max(0.0, dt)
 
         self._last_update_ts = timestamp
