@@ -82,15 +82,31 @@ Camera
 
 ## Calibration
 
-The MVP will include a browser-based calibration page. Initial calibration should support:
+The browser calibration page is available at:
 
-1. Selecting the wheel center
-2. Selecting the wheel edge / radius
-3. Sampling the marker color
-4. Previewing the valid marker annulus
-5. Verifying live marker detection
+```text
+/calibration
+```
 
-Calibration should be performed under lighting similar to actual nighttime operation.
+The hardware-independent version already supports:
+
+1. clicking the wheel center
+2. clicking the wheel edge to derive image-space radius
+3. clicking the marker position to derive its radius ratio
+4. previewing the accepted marker annulus
+5. editing the effective running diameter
+6. editing HSV lower/upper bounds
+7. validating and atomically persisting the configuration
+
+The preview currently uses a synthetic 1280×720 background because the Jetson camera is not available during development. The same overlay/interaction model is intended to sit on top of the live camera frame later.
+
+Configuration defaults to `config.json` and can be overridden with:
+
+```bash
+HAMSTER_TRACKER_CONFIG=/path/to/config.json
+```
+
+Calibration should ultimately be performed under lighting similar to actual nighttime operation. Real camera marker-color sampling and live detection verification remain hardware-dependent.
 
 ## Robustness Principles
 
@@ -129,10 +145,16 @@ Start the mobile dashboard against the generated database:
 
 ```bash
 HAMSTER_TRACKER_DB=data/synthetic-night.db \
+HAMSTER_TRACKER_CONFIG=data/dev-config.json \
 uvicorn hamster_tracker.web.app:app --host 0.0.0.0 --port 8000
 ```
 
-Then open `http://<computer-ip>:8000` from a phone or browser on the same network.
+Then open:
+
+```text
+http://<computer-ip>:8000
+http://<computer-ip>:8000/calibration
+```
 
 The dashboard currently includes:
 
@@ -152,12 +174,14 @@ A reporting **night** currently runs from local **18:00 to 18:00 the next day**.
 Useful JSON endpoints include:
 
 ```text
-GET /api/dashboard
-GET /api/dashboard?night=YYYY-MM-DD
-GET /api/status
-GET /api/history?days=7
-GET /api/sessions
-GET /api/health
+GET  /api/dashboard
+GET  /api/dashboard?night=YYYY-MM-DD
+GET  /api/status
+GET  /api/history?days=7
+GET  /api/sessions
+GET  /api/health
+GET  /api/calibration
+POST /api/calibration
 ```
 
 ## Development Milestones
@@ -201,10 +225,12 @@ GET /api/health
 
 ### M5 - Calibration and Mobile Web UI
 
-- Mobile current-night dashboard (hardware-independent path implemented)
-- Night/session history (hardware-independent path implemented)
-- Camera preview
-- Interactive calibration
+- Mobile current-night dashboard (implemented)
+- Night/session history (implemented)
+- Interactive geometry/HSV calibration with persistent config (implemented)
+- Live camera preview (hardware-dependent)
+- Click-to-sample real marker color (hardware-dependent)
+- Live accepted/rejected detection overlay (hardware-dependent)
 
 ### M6 - Jetson Deployment
 
@@ -215,6 +241,6 @@ GET /api/health
 
 ## Project Status
 
-The hardware-independent tracker, synthetic simulator, SQLite persistence, API, and mobile dashboard are implemented on the current feature branch. Camera bring-up, real low-light marker tuning, and browser calibration preview remain hardware-dependent.
+The hardware-independent tracker, synthetic simulator, SQLite persistence, API, mobile dashboard, and interactive calibration/configuration flow are implemented on the current feature branch. Camera bring-up, real low-light marker tuning, live calibration preview, and Jetson deployment remain hardware-dependent.
 
 See [`docs/design.md`](docs/design.md) for the detailed MVP design and engineering decisions.

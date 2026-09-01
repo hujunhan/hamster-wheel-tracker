@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from hamster_tracker.storage.database import Database
+from hamster_tracker.web.calibration import build_calibration_router
 
 
 NIGHT_ROLLOVER_HOUR = 18
@@ -162,7 +163,7 @@ DASHBOARD_HTML = r"""<!doctype html>
   </section>
 
   <section class="panel">
-    <div class="panel-head"><h2>Recent nights</h2><button onclick="loadDashboard()">Refresh</button></div>
+    <div class="panel-head"><h2>Recent nights</h2><div><button onclick="location.href='/calibration'">Calibration</button> <button onclick="loadDashboard()">Refresh</button></div></div>
     <div id="history"></div>
   </section>
   <footer>Local-only dashboard · data stored on the Jetson Nano</footer>
@@ -346,11 +347,14 @@ def _night_payload(db: Database, start_ts: float, end_ts: float, now_ts: float) 
     }
 
 
-def create_app(database_path: Optional[str] = None) -> FastAPI:
+def create_app(database_path: Optional[str] = None, config_path: Optional[str] = None) -> FastAPI:
     app = FastAPI(title="Hamster Wheel Tracker", version="0.1.0")
     db_path = database_path or os.environ.get("HAMSTER_TRACKER_DB", "data/tracker.db")
+    resolved_config_path = config_path or os.environ.get("HAMSTER_TRACKER_CONFIG", "config.json")
     db = Database(db_path)
     app.state.database = db
+    app.state.config_path = resolved_config_path
+    app.include_router(build_calibration_router(resolved_config_path))
 
     @app.on_event("shutdown")
     def close_database() -> None:
@@ -362,7 +366,12 @@ def create_app(database_path: Optional[str] = None) -> FastAPI:
 
     @app.get("/api/health")
     def health() -> Dict[str, object]:
-        return {"ok": True, "camera": "not_configured", "database_path": db_path}
+        return {
+            "ok": True,
+            "camera": "not_configured",
+            "database_path": db_path,
+            "config_path": resolved_config_path,
+        }
 
     @app.get("/api/status")
     def status() -> Dict[str, object]:
