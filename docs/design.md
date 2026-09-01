@@ -204,22 +204,22 @@ Marker is visible and passes geometry / motion checks. Accumulate angle and moti
 
 ### PREDICTING
 
-Marker disappears briefly. Predict expected angle/location using recent angular velocity, but avoid committing arbitrary long-distance motion without observation.
+Marker disappears briefly. Preserve the recent phase relationship for a short, configurable interval. If the marker reappears quickly enough that the incremental angle remains unambiguous, continue tracking normally.
 
 ### UNCERTAIN
 
-Gap is too long or reacquisition is ambiguous. Reinitialize phase when a marker is confidently seen again and explicitly record an uncertainty gap.
+Gap is too long or reacquisition is ambiguous. When a marker is confidently seen again, reinitialize the observable wheel phase **without adding guessed distance** for the hidden interval.
 
 A core principle is: **prefer undercounting an ambiguous interval over silently inventing multiple revolutions.**
 
 ## 9. Running State and Sessions
 
-Define `running` using smoothed absolute angular speed and hysteresis.
+Define `running` using speed thresholds and hysteresis.
 
 Example conceptual thresholds:
 
 ```text
-start_running if speed > start_threshold for N samples
+start_running if speed > start_threshold
 stop_running if speed < stop_threshold for T seconds
 ```
 
@@ -243,6 +243,8 @@ Per-session statistics:
 - maximum speed
 - forward / backward travel if stable
 
+`moving_duration` is based on observed wheel motion rather than the full hysteresis window, so a pause does not inflate average-speed calculations.
+
 ## 10. Storage Model
 
 Do not persist every video frame.
@@ -255,13 +257,18 @@ Suggested tables:
 
 ```text
 timestamp
+interval_s
+moving_duration_s
 distance_delta_m
 signed_angle_delta_rad
+angular_travel_delta_rad
 speed_m_s
 running
 detection_quality
 tracking_state
 ```
+
+`moving_duration_s` preserves sub-second activity. For example, if the hamster moves for 0.3 seconds inside a 1-second storage bucket, the database stores 0.3 seconds rather than rounding the bucket up to a full second.
 
 ### sessions
 
@@ -277,7 +284,7 @@ avg_speed_m_s
 max_speed_m_s
 ```
 
-### daily_stats
+### daily stats
 
 ```text
 date
@@ -292,7 +299,41 @@ session_count
 
 SQLite is sufficient for MVP scale.
 
-## 11. Web Architecture
+## 11. Tracker Engine
+
+The hardware-independent `TrackerEngine` is the integration boundary between a marker source and the statistics/storage system.
+
+Conceptually:
+
+```text
+marker observation / missing marker
+        -> TrackerEngine
+             -> RotationTracker
+             -> tracking state machine
+             -> SessionTracker
+             -> 1 s ActivityAggregator
+             -> SQLite
+```
+
+The eventual camera loop should only need to provide timestamps plus either a trusted marker centroid or a missing-marker event. This keeps camera/Jetson details outside the core motion logic.
+
+## 12. Synthetic Development Path
+
+Before camera hardware is available, the same engine can be driven by synthetic trajectories.
+
+The synthetic generator supports piecewise motion segments with:
+
+- idle periods
+- forward rotation
+- reverse rotation
+- different angular speeds
+- centroid jitter
+- short marker occlusion
+- long ambiguous occlusion
+
+A demo scenario passes these observations through the production rotation/session/aggregation/database path. This makes the mathematical and persistence layers testable without Jetson hardware.
+
+## 13. Web Architecture
 
 Use FastAPI with server-rendered HTML and lightweight JavaScript.
 
@@ -311,7 +352,7 @@ POST /api/calibration     save calibration
 
 The UI should be usable from a phone browser on the same LAN.
 
-## 12. Dashboard MVP
+## 14. Dashboard MVP
 
 Current-night view:
 
@@ -332,7 +373,7 @@ History:
 - daily running time
 - session list
 
-## 13. Suggested Package Layout
+## 15. Suggested Package Layout
 
 ```text
 src/hamster_tracker/
@@ -345,9 +386,13 @@ src/hamster_tracker/
     rotation_tracker.py
     motion_filter.py
     session_tracker.py
+    engine.py
   storage/
+    aggregation.py
     database.py
     models.py
+  sim/
+    trajectory.py
   web/
     app.py
     api.py
@@ -357,15 +402,16 @@ scripts/
   camera_test.py
   marker_test.py
   rotation_test.py
+  simulate_night.py
 
 tests/
 ```
 
 Keep modules small and test the geometry/tracking logic independently of real camera hardware.
 
-## 14. Test Strategy
+## 16. Test Strategy
 
-The rotation tracker should have synthetic tests before relying on the live camera.
+The rotation tracker and engine should have synthetic tests before relying on the live camera.
 
 Important cases:
 
@@ -379,8 +425,11 @@ Important cases:
 - implausible marker jump
 - long ambiguous marker loss
 - different frame intervals
+- end-to-end trajectory -> sessions -> SQLite
+- pauses do not inflate moving duration
+- partial storage buckets preserve exact moving time
 
-## 15. MVP Acceptance Criteria
+## 17. MVP Acceptance Criteria
 
 The MVP is successful when:
 
@@ -394,7 +443,7 @@ The MVP is successful when:
 8. A phone on the same LAN can view current and historical metrics.
 9. Calibration can be performed from the browser without editing source code.
 
-## 16. Non-Goals for MVP
+## 18. Non-Goals for MVP
 
 - hamster identity recognition
 - pose estimation
