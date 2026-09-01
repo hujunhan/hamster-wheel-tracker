@@ -12,11 +12,14 @@ SERVICE_USER="${SUDO_USER:-}"
 
 usage() {
   cat <<EOF
-Usage: sudo ./deploy/install_service.sh [--user USER]
+Usage: sudo bash deploy/install_service.sh [--user USER]
 
 Installs/updates the Python environment and systemd service using the current
 repository checkout at:
   ${REPO_DIR}
+
+Override the interpreter when needed with, for example:
+  sudo env PYTHON_BIN=/usr/local/bin/python3.8 bash deploy/install_service.sh --user USER
 EOF
 }
 
@@ -60,6 +63,28 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 if [[ ! -f "${REPO_DIR}/pyproject.toml" ]]; then
   echo "pyproject.toml not found in ${REPO_DIR}" >&2
   exit 2
+fi
+
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1 && [[ ! -x "${PYTHON_BIN}" ]]; then
+  echo "Python interpreter not found: ${PYTHON_BIN}" >&2
+  exit 3
+fi
+
+if ! "${PYTHON_BIN}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)'; then
+  VERSION="$(${PYTHON_BIN} --version 2>&1 || true)"
+  cat >&2 <<EOF
+Unsupported Python runtime: ${VERSION}
+
+hamster-wheel-tracker currently requires Python >= 3.8.
+Stock JetPack 4.x / Ubuntu 18.04 commonly uses Python 3.6, so do not replace
+/usr/bin/python3 just to satisfy this installer; NVIDIA camera/OpenCV bindings may
+depend on the system Python.
+
+Use a separate Python >= 3.8 interpreter and re-run with PYTHON_BIN=/path/to/python,
+or wait until the Jetson hardware is available so its camera/Python stack can be
+validated before choosing the compatibility strategy.
+EOF
+  exit 3
 fi
 
 install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" "${STATE_DIR}"
