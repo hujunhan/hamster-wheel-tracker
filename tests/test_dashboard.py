@@ -25,7 +25,7 @@ def test_night_bounds_roll_over_at_18_local_time():
 def test_dashboard_api_returns_night_summary_hourly_timeline_and_sessions(tmp_path):
     app = create_app(str(tmp_path / "dashboard.db"))
     db = app.state.database
-    start = ts(2026, 9, 1, 18, 0)
+    start = ts(2026, 8, 30, 18, 0)
 
     db.insert_activity(
         ActivitySample(
@@ -69,7 +69,7 @@ def test_dashboard_api_returns_night_summary_hourly_timeline_and_sessions(tmp_pa
     )
 
     with TestClient(app) as client:
-        response = client.get("/api/dashboard?night=2026-09-01")
+        response = client.get("/api/dashboard?night=2026-08-30")
         assert response.status_code == 200
         payload = response.json()
         assert payload["summary"]["distance_m"] == pytest.approx(5.0)
