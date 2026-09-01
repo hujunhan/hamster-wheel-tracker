@@ -13,6 +13,9 @@ dependencies = [
   "uvicorn>=0.27,<1",
 ]
 
+[project.scripts]
+hamster-tracker = "hamster_tracker.cli:main"
+
 [project.optional-dependencies]
 vision = ["numpy>=1.21", "opencv-python>=4.5"]
 dev = ["pytest>=7", "httpx>=0.25,<1"]
