@@ -12,7 +12,7 @@ class _Bucket:
     signed_angle_rad: float = 0.0
     angular_travel_rad: float = 0.0
     max_speed_m_s: float = 0.0
-    running_seconds: float = 0.0
+    moving_seconds: float = 0.0
     quality_weighted: float = 0.0
     quality_weight: float = 0.0
     state: str = "SEARCHING"
@@ -55,8 +55,8 @@ class ActivityAggregator:
         bucket.signed_angle_rad += signed_angle_delta_rad
         bucket.angular_travel_rad += max(0.0, angular_travel_delta_rad)
         bucket.max_speed_m_s = max(bucket.max_speed_m_s, max(0.0, speed_m_s))
-        if running:
-            bucket.running_seconds += min(dt, self.interval_s)
+        if angular_travel_delta_rad > 0.0:
+            bucket.moving_seconds += min(dt, self.interval_s)
         bucket.state = tracking_state
         if detection_quality is not None:
             weight = max(dt, 1e-6)
@@ -90,7 +90,8 @@ class ActivityAggregator:
             signed_angle_delta_rad=bucket.signed_angle_rad,
             angular_travel_delta_rad=bucket.angular_travel_rad,
             speed_m_s=bucket.max_speed_m_s,
-            running=bucket.running_seconds > 0.0,
+            running=bucket.moving_seconds > 0.0,
             tracking_state=bucket.state,
             detection_quality=quality,
+            moving_duration_s=min(bucket.moving_seconds, self.interval_s),
         )
