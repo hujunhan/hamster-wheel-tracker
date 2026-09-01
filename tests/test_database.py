@@ -24,3 +24,23 @@ def test_activity_summary_and_session_persistence():
     assert len(rows) == 1
     assert rows[0]["distance_m"] == pytest.approx(1.5)
     db.close()
+
+
+def test_explicit_partial_moving_duration_is_not_rounded_to_full_bucket():
+    db = Database(":memory:")
+    db.insert_activity(
+        ActivitySample(
+            timestamp=100.0,
+            interval_s=1.0,
+            distance_delta_m=0.12,
+            signed_angle_delta_rad=1.0,
+            angular_travel_delta_rad=1.0,
+            speed_m_s=0.4,
+            running=True,
+            moving_duration_s=0.3,
+        )
+    )
+    summary = db.summary(99.0, 200.0)
+    assert summary["moving_duration_s"] == pytest.approx(0.3)
+    assert summary["avg_speed_m_s"] == pytest.approx(0.4)
+    db.close()
