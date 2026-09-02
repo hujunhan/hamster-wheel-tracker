@@ -31,6 +31,10 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    sourceSets {
+        getByName("test").resources.srcDir("../../shared/test-vectors")
+    }
 }
 
 dependencies {
