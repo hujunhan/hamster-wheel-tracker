@@ -20,9 +20,6 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.hujunhan.hamsterwheeltracker.camera.AnalysisStats
@@ -49,8 +46,6 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var calibrationStore: CalibrationStore
     private var calibration = CalibrationConfig()
-    private var cameraProvider: ProcessCameraProvider? = null
-    private var previewUseCase: Preview? = null
     private var trackingService: TrackingService? = null
     private var bindRequested = false
     private var serviceBound = false
@@ -107,13 +102,13 @@ class MainActivity : ComponentActivity() {
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val localBinder = binder as? TrackingService.LocalBinder ?: return
-            trackingService = localBinder.service()
+            val service = localBinder.service()
+            trackingService = service
             serviceBound = true
-            trackingService?.addListener(serviceListener)
-            trackingService?.currentCalibration()?.let {
-                calibration = it
-                renderCalibration()
-            }
+            service.addListener(serviceListener)
+            service.attachPreview(previewView.surfaceProvider)
+            calibration = service.currentCalibration()
+            renderCalibration()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -142,8 +137,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Dedicated tracker mode: do not let normal screen timeout stop the visible UI.
-        // The foreground service still keeps tracking if the user explicitly locks it.
+        // Dedicated counter mode: normal display timeout is disabled while the
+        // calibration UI is visible. Explicit screen-off still leaves the service alive.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         buildUi()
@@ -161,12 +156,11 @@ class MainActivity : ComponentActivity() {
         ) {
             TrackingService.start(this)
             bindTrackingService()
-            startPreview()
         }
     }
 
     override fun onStop() {
-        stopPreview()
+        trackingService?.detachPreview()
         unbindTrackingService()
         super.onStop()
     }
@@ -219,12 +213,12 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(Color.rgb(24, 24, 24))
         }
 
-        statusView = textView(Color.WHITE, 14f, "Starting tracking service…")
+        statusView = textView(Color.WHITE, 14f, "Starting foreground service…")
         statsView = textView(Color.LTGRAY, 13f, "Waiting for analysis frames…")
         detectionView = textView(Color.WHITE, 14f, "Marker: waiting…")
         trackingView = textView(Color.WHITE, 14f, "Tracker: waiting for marker…")
         calibrationView = textView(Color.LTGRAY, 12f, "Calibration loading…")
-        dashboardView = textView(Color.CYAN, 12f, "Dashboard waiting for tracking service…")
+        dashboardView = textView(Color.CYAN, 12f, "Dashboard waiting for service…")
         panel.addView(statusView)
         panel.addView(statsView)
         panel.addView(detectionView)
@@ -302,20 +296,19 @@ class MainActivity : ComponentActivity() {
         statusView.text = "Starting foreground tracking service…"
         TrackingService.start(this)
         bindTrackingService()
-        startPreview()
     }
 
     private fun stopTrackingFromUi() {
         runtimePrefs.edit().putBoolean(KEY_TRACKING_ENABLED, false).apply()
+        trackingService?.detachPreview()
         TrackingService.stop(this)
-        stopPreview()
         startStopButton.text = "Start tracking"
         toggleButton.isEnabled = false
         statsView.text = "Tracking stopped."
         detectionView.text = "Marker detection stopped."
         trackingView.text = "Tracker stopped."
-        dashboardView.text = "Dashboard stopped with tracking service."
-        statusView.text = "Tracking stopped; camera and background work are being released"
+        dashboardView.text = "Dashboard stopped with service."
+        statusView.text = "Tracking stopped; releasing camera and background resources"
     }
 
     private fun bindTrackingService() {
@@ -336,46 +329,13 @@ class MainActivity : ComponentActivity() {
         bindRequested = false
     }
 
-    private fun startPreview() {
-        if (!trackingDesired) return
-        val providerFuture = ProcessCameraProvider.getInstance(this)
-        providerFuture.addListener(
-            {
-                runCatching {
-                    val provider = providerFuture.get()
-                    cameraProvider = provider
-                    previewUseCase?.let(provider::unbind)
-                    val preview = Preview.Builder().build().also {
-                        it.surfaceProvider = previewView.surfaceProvider
-                    }
-                    previewUseCase = preview
-                    // ImageAnalysis is owned by TrackingService. Binding only Preview
-                    // here lets the service continue when this Activity stops.
-                    provider.bindToLifecycle(
-                        this,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                    )
-                }.onFailure { error ->
-                    statusView.text = "Preview bind failed: ${error.message ?: error.javaClass.simpleName}"
-                }
-            },
-            ContextCompat.getMainExecutor(this),
-        )
-    }
-
-    private fun stopPreview() {
-        previewUseCase?.let { preview -> cameraProvider?.unbind(preview) }
-        previewUseCase = null
-    }
-
     private fun renderServiceState(state: TrackingService.ServiceState) {
         statusView.text = state.message
         startStopButton.text = if (state.tracking) "Stop tracking" else "Start tracking"
         toggleButton.isEnabled = state.tracking
         toggleButton.text = if (state.analysisEnabled) "Pause analysis" else "Resume analysis"
         dashboardView.text = when {
-            !state.tracking -> "Dashboard stopped with tracking service."
+            !state.tracking -> "Dashboard stopped with service."
             state.dashboardUrl != null -> "Dashboard: ${state.dashboardUrl} · open from another device on the same Wi-Fi"
             else -> "Dashboard: port 8080 active; connect this phone to Wi-Fi for a LAN address"
         }
@@ -385,7 +345,7 @@ class MainActivity : ComponentActivity() {
         statusView.text = "Tracking is stopped. Tap Start tracking to begin."
         startStopButton.text = "Start tracking"
         toggleButton.isEnabled = false
-        dashboardView.text = "Dashboard stopped with tracking service."
+        dashboardView.text = "Dashboard stopped with service."
     }
 
     private fun renderStats(snapshot: AnalysisStats.Snapshot) {
