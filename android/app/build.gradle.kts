@@ -44,5 +44,9 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraXVersion")
     implementation("androidx.camera:camera-view:$cameraXVersion")
 
+    // Official OpenCV Android AAR from Maven Central. 4.10 is intentionally
+    // conservative for the dedicated Android 12 device.
+    implementation("org.opencv:opencv:4.10.0")
+
     testImplementation("junit:junit:4.13.2")
 }
