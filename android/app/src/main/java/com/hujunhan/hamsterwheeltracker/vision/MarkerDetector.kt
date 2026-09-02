@@ -49,7 +49,7 @@ class MarkerDetector {
         try {
             for (contour in contours) {
                 val area = Imgproc.contourArea(contour)
-                if (area < config.minAreaPx || area > config.maxAreaPx) {
+                if (area < resolved.minMarkerAreaPx || area > resolved.maxMarkerAreaPx) {
                     areaRejected++
                     val rect = Imgproc.boundingRect(contour)
                     candidates += MarkerCandidate(
@@ -79,7 +79,7 @@ class MarkerDetector {
                 }
 
                 val radialScore = 1.0 - radialError / resolved.radiusTolerancePx.coerceAtLeast(1e-6f)
-                val areaScore = (area / (config.minAreaPx * 4.0).coerceAtLeast(1.0)).coerceAtMost(1.0)
+                val areaScore = (area / (resolved.minMarkerAreaPx * 4.0).coerceAtLeast(1.0)).coerceAtMost(1.0)
                 val score = (0.8 * radialScore + 0.2 * areaScore).toFloat()
                 val detection = MarkerDetection(x, y, area, radial, score)
                 acceptedCandidates++
