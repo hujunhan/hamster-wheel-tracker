@@ -15,26 +15,29 @@ ImageAnalysis (1280x720 target, KEEP_ONLY_LATEST)
 
 No marker detection or wheel tracking runs in the Android app yet. Those come in #15 and #16. Keeping the camera source independent is deliberate so real, recorded, or synthetic frames can drive the same downstream detector later.
 
-## Toolchain
+## Target device and toolchain
 
-- Android Gradle Plugin 9.3.1
-- Gradle 9.5.0
+The dedicated phone runs Android 12, so M0 targets Android 12 directly instead of following the newest Android SDK/runtime behavior.
+
+- Android 12 target/minimum: API 31
+- compile SDK 34 (stable build SDK only)
+- Android Gradle Plugin 8.5.2
+- Gradle 8.7
+- Kotlin 1.9.24
 - JDK 17
-- built-in Kotlin support from AGP 9
-- CameraX 1.6.2
-- compile SDK 37
-- target SDK 36
-- minimum SDK 26
+- CameraX 1.4.2
+- Activity 1.9.3
+- AndroidX Core 1.13.1
 
-`compileSdk` is newer than `targetSdk` deliberately: current AndroidX Core requires API 37 at compile time, while the app has not yet opted into Android 37 target-runtime behavior.
+`compileSdk = 34` does not require the phone to run Android 14; it only defines the API surface used while compiling. Runtime behavior is intentionally pinned to `targetSdk = 31` for the Android 12 device.
 
-The repository does not check in a Gradle wrapper binary yet. Android Studio can import `android/` as a Gradle project, while CI installs Gradle 9.5.0 explicitly.
+The repository does not check in a Gradle wrapper binary yet. Android Studio can import `android/` as a Gradle project, while CI installs Gradle 8.7 explicitly.
 
 ## Run on the Motorola phone
 
 1. Open the `android/` directory in Android Studio.
-2. Let Gradle sync and install Android SDK 37 if prompted.
-3. Enable Developer options and USB debugging on the phone.
+2. Let Gradle sync and install Android SDK 34 if prompted.
+3. Enable Developer options and USB debugging on the Android 12 phone.
 4. Connect the phone by USB and accept the debugging authorization dialog.
 5. Select the Motorola device and run the `app` configuration.
 6. Grant camera permission.
@@ -53,7 +56,7 @@ CameraX uses `STRATEGY_KEEP_ONLY_LATEST`. CameraX does not expose an exact count
 
 ## Command-line build
 
-With JDK 17, Android SDK 37, and Gradle 9.5 installed:
+With JDK 17, Android SDK 34, and Gradle 8.7 installed:
 
 ```bash
 gradle -p android :app:testDebugUnitTest :app:assembleDebug
@@ -69,7 +72,7 @@ CI can prove that the project compiles and unit tests pass, but #14 stays open u
 - practical measured FPS/resolution
 - 30-minute camera/analyzer soak test
 - no analyzer stall/leak
-- screen off/on lifecycle does not corrupt state
+- screen off/on lifecycle returns cleanly
 
 Long-running camera use while the app is backgrounded belongs to #17 (foreground tracking service), not this milestone.
 
