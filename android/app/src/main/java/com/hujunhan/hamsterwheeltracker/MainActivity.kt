@@ -317,18 +317,27 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun renderDetection(result: MarkerFrameResult) {
+        val debug = String.format(
+            Locale.US,
+            "mask %d px · contours %d · rejected area %d annulus %d · accepted %d",
+            result.maskPixelCount,
+            result.contourCount,
+            result.areaRejectedCount,
+            result.annulusRejectedCount,
+            result.acceptedCandidateCount,
+        )
         val detection = result.detection
         detectionView.text = if (detection == null) {
-            "Marker: not found · candidates ${result.candidates.size}"
+            "Marker: not found\n$debug"
         } else {
             String.format(
                 Locale.US,
-                "Marker: (%.0f, %.0f) · score %.3f · area %.0f px² · candidates %d",
+                "Marker: (%.0f, %.0f) · score %.3f · area %.0f px²\n%s",
                 detection.xPx,
                 detection.yPx,
                 detection.score,
                 detection.areaPx,
-                result.candidates.size,
+                debug,
             )
         }
     }
@@ -358,9 +367,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyMarkerSample(sample: HsvSample) {
-        updateCalibration(calibration.withMarkerSample(sample.h, sample.s, sample.v))
+        updateCalibration(calibration.withMarkerSample(sample))
         tapMode = TapMode.NONE
-        statusView.text = "Sampled marker HSV ${sample.h}, ${sample.s}, ${sample.v}; thresholds updated"
+        statusView.text = "Sampled ${sample.sampleCount}-px marker patch: HSV ${sample.h}, ${sample.s}, ${sample.v}; thresholds updated"
     }
 
     private fun handleOverlayTouch(event: MotionEvent): Boolean {
@@ -380,7 +389,7 @@ class MainActivity : ComponentActivity() {
             }
             TapMode.SAMPLE_MARKER -> {
                 frameAnalyzer.requestHsvSample(point.x, point.y)
-                statusView.text = "Sampling marker color on next frame…"
+                statusView.text = "Sampling marker color patch on next frame…"
             }
             TapMode.NONE -> Unit
         }
