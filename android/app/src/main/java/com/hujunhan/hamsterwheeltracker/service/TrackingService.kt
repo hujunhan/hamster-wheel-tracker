@@ -107,6 +107,8 @@ class TrackingService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
+        calibrationStore = CalibrationStore(this)
+        calibration = calibrationStore.load()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Starting wheel tracker…"))
     }
@@ -188,8 +190,6 @@ class TrackingService : LifecycleService() {
             return
         }
 
-        calibrationStore = CalibrationStore(this)
-        calibration = calibrationStore.load()
         analysisExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "camera-analysis")
         }
@@ -303,7 +303,7 @@ class TrackingService : LifecycleService() {
     }
 
     private fun stopTracking() {
-        if (!tracking && !::analysisExecutor.isInitialized) return
+        if (!tracking) return
         tracking = false
         serviceMessage = "Tracking stopped"
         analysisUseCase?.let { useCase -> cameraProvider?.unbind(useCase) }
@@ -311,9 +311,9 @@ class TrackingService : LifecycleService() {
         dashboardServer?.stop()
         dashboardServer = null
         dashboardUrl = null
-        if (::trackingRecorder.isInitialized) trackingRecorder.close()
-        if (::frameAnalyzer.isInitialized) frameAnalyzer.close()
-        if (::analysisExecutor.isInitialized) analysisExecutor.shutdown()
+        trackingRecorder.close()
+        frameAnalyzer.close()
+        analysisExecutor.shutdown()
         releaseWakeLock()
         publishState()
     }
