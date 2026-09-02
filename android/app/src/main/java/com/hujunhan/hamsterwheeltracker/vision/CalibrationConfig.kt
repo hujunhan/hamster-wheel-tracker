@@ -40,17 +40,20 @@ data class CalibrationConfig(
         )
     }
 
-    fun withMarkerSample(h: Int, s: Int, v: Int): CalibrationConfig {
-        val hue = h.coerceIn(0, 179)
-        // The intended marker is green/blue/pink rather than red, so the first
-        // Android pass can use a simple non-wrapping hue interval.
-        val lowerH = (hue - 12).coerceAtLeast(0)
-        val upperH = (hue + 12).coerceAtMost(179)
+    /**
+     * Builds forgiving initial bounds from the median of an 11x11 live patch.
+     * The annulus is the stronger spatial discriminator, so color sampling is
+     * intentionally broad enough to tolerate Android ISP/AWB variation.
+     */
+    fun withMarkerSample(sample: HsvSample): CalibrationConfig {
+        val hue = sample.h.coerceIn(0, 179)
+        val lowerH = (hue - 15).coerceAtLeast(0)
+        val upperH = (hue + 15).coerceAtMost(179)
         return copy(
             hsvLowerH = lowerH,
             hsvUpperH = upperH,
-            hsvLowerS = (s - 80).coerceIn(40, 255),
-            hsvLowerV = (v - 80).coerceIn(30, 255),
+            hsvLowerS = (sample.s - 60).coerceIn(25, 255),
+            hsvLowerV = (sample.v - 60).coerceIn(20, 255),
         )
     }
 }
@@ -65,4 +68,9 @@ data class ResolvedCalibration(
     val frameHeight: Int,
 )
 
-data class HsvSample(val h: Int, val s: Int, val v: Int)
+data class HsvSample(
+    val h: Int,
+    val s: Int,
+    val v: Int,
+    val sampleCount: Int = 1,
+)
