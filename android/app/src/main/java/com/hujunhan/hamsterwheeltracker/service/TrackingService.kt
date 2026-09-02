@@ -14,6 +14,7 @@ import android.os.PowerManager
 import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -38,13 +39,7 @@ import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-/**
- * Owns the long-running camera analysis pipeline.
- *
- * The service is both started and bound: the started foreground-service lifetime
- * keeps tracking alive when MainActivity is stopped/screen-off, while the local
- * binder gives the visible UI live diagnostics and calibration controls.
- */
+/** Long-running runtime for the dedicated pet hamster wheel counter. */
 class TrackingService : LifecycleService() {
     interface Listener {
         fun onServiceState(state: ServiceState) = Unit
@@ -76,32 +71,19 @@ class TrackingService : LifecycleService() {
 
     private var dashboardServer: DashboardServer? = null
     private var cameraProvider: ProcessCameraProvider? = null
+    private var previewUseCase: Preview? = null
     private var analysisUseCase: ImageAnalysis? = null
+    private var previewSurfaceProvider: Preview.SurfaceProvider? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
-    @Volatile
-    private var calibration = CalibrationConfig()
-
-    @Volatile
-    private var tracking = false
-
-    @Volatile
-    private var analysisEnabled = true
-
-    @Volatile
-    private var serviceMessage = "Starting tracking service…"
-
-    @Volatile
-    private var dashboardUrl: String? = null
-
-    @Volatile
-    private var latestStats: AnalysisStats.Snapshot? = null
-
-    @Volatile
-    private var latestMarkerFrame: MarkerFrameResult? = null
-
-    @Volatile
-    private var latestTrackerSnapshot: TrackerSnapshot? = null
+    @Volatile private var calibration = CalibrationConfig()
+    @Volatile private var tracking = false
+    @Volatile private var analysisEnabled = true
+    @Volatile private var serviceMessage = "Starting tracking service…"
+    @Volatile private var dashboardUrl: String? = null
+    @Volatile private var latestStats: AnalysisStats.Snapshot? = null
+    @Volatile private var latestMarkerFrame: MarkerFrameResult? = null
+    @Volatile private var latestTrackerSnapshot: TrackerSnapshot? = null
 
     private var lastNotificationUpdateMs = 0L
 
@@ -110,7 +92,7 @@ class TrackingService : LifecycleService() {
         calibrationStore = CalibrationStore(this)
         calibration = calibrationStore.load()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Starting wheel tracker…"))
+        startForeground(NOTIFICATION_ID, buildNotification("Starting wheel counter…"))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -160,6 +142,17 @@ class TrackingService : LifecycleService() {
 
     fun requestHsvSample(xPx: Float, yPx: Float) {
         if (::frameAnalyzer.isInitialized) frameAnalyzer.requestHsvSample(xPx, yPx)
+    }
+
+    /** Attach/detach the Activity's PreviewView without changing camera ownership. */
+    fun attachPreview(surfaceProvider: Preview.SurfaceProvider) {
+        previewSurfaceProvider = surfaceProvider
+        previewUseCase?.setSurfaceProvider(surfaceProvider)
+    }
+
+    fun detachPreview() {
+        previewSurfaceProvider = null
+        previewUseCase?.setSurfaceProvider(null)
     }
 
     fun setAnalysisEnabled(enabled: Boolean) {
@@ -227,10 +220,10 @@ class TrackingService : LifecycleService() {
         tracking = true
         serviceMessage = "Opening rear camera…"
         publishState()
-        bindAnalysisCamera()
+        bindCameraUseCases()
     }
 
-    private fun bindAnalysisCamera() {
+    private fun bindCameraUseCases() {
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener(
             {
@@ -245,16 +238,22 @@ class TrackingService : LifecycleService() {
                             ),
                         )
                         .build()
+
+                    val preview = Preview.Builder().build()
+                    previewSurfaceProvider?.let(preview::setSurfaceProvider)
                     val analysis = ImageAnalysis.Builder()
                         .setResolutionSelector(resolutionSelector)
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                         .build()
                         .also { it.setAnalyzer(analysisExecutor, frameAnalyzer) }
+
+                    previewUseCase = preview
                     analysisUseCase = analysis
                     provider.bindToLifecycle(
                         this,
                         CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
                         analysis,
                     )
                     serviceMessage = "Tracking active · camera analysis running"
@@ -306,7 +305,16 @@ class TrackingService : LifecycleService() {
         if (!tracking) return
         tracking = false
         serviceMessage = "Tracking stopped"
-        analysisUseCase?.let { useCase -> cameraProvider?.unbind(useCase) }
+        detachPreview()
+        val preview = previewUseCase
+        val analysis = analysisUseCase
+        if (preview != null && analysis != null) {
+            cameraProvider?.unbind(preview, analysis)
+        } else {
+            preview?.let { cameraProvider?.unbind(it) }
+            analysis?.let { cameraProvider?.unbind(it) }
+        }
+        previewUseCase = null
         analysisUseCase = null
         dashboardServer?.stop()
         dashboardServer = null
@@ -353,7 +361,7 @@ class TrackingService : LifecycleService() {
                 "Wheel tracking",
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "Keeps hamster-wheel camera tracking active"
+                description = "Keeps hamster-wheel camera counting active"
                 setShowBadge(false)
             },
         )
@@ -376,7 +384,7 @@ class TrackingService : LifecycleService() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("Hamster wheel tracking")
+            .setContentTitle("Hamster wheel counter")
             .setContentText(text)
             .setContentIntent(openIntent)
             .setOngoing(tracking)
