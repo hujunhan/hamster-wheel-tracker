@@ -1,5 +1,7 @@
 package com.hujunhan.hamsterwheeltracker.vision
 
+import kotlin.math.PI
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -20,7 +22,11 @@ data class CalibrationConfig(
     val hsvLowerS: Int = 80,
     val hsvLowerV: Int = 50,
     val minAreaPx: Double = 30.0,
+    // Absolute floor for the maximum marker area. The effective upper bound is
+    // also allowed to scale with wheel size so a closer camera / larger stream
+    // does not reject the same physical sticker merely because it covers more pixels.
     val maxAreaPx: Double = 5000.0,
+    val maxAreaWheelFraction: Double = 0.05,
     val morphologyKernel: Int = 3,
     val effectiveDiameterMm: Float = 228.6f,
 ) {
@@ -29,12 +35,16 @@ data class CalibrationConfig(
         val wheelRadius = wheelRadiusNorm.coerceIn(0.1f, 0.49f) * shortSide
         val pathRatio = markerPathRadiusRatio.coerceIn(0.2f, 0.98f)
         val toleranceRatio = radiusToleranceRatio.coerceIn(0.01f, 0.4f)
+        val wheelDiskAreaPx = PI * wheelRadius * wheelRadius
+        val adaptiveMaxArea = wheelDiskAreaPx * maxAreaWheelFraction.coerceIn(0.001, 0.25)
         return ResolvedCalibration(
             centerX = centerXNorm.coerceIn(0f, 1f) * frameWidth,
             centerY = centerYNorm.coerceIn(0f, 1f) * frameHeight,
             wheelRadiusPx = wheelRadius,
             expectedMarkerRadiusPx = wheelRadius * pathRatio,
             radiusTolerancePx = wheelRadius * toleranceRatio,
+            minMarkerAreaPx = minAreaPx,
+            maxMarkerAreaPx = max(maxAreaPx, adaptiveMaxArea),
             frameWidth = frameWidth,
             frameHeight = frameHeight,
         )
@@ -64,6 +74,8 @@ data class ResolvedCalibration(
     val wheelRadiusPx: Float,
     val expectedMarkerRadiusPx: Float,
     val radiusTolerancePx: Float,
+    val minMarkerAreaPx: Double,
+    val maxMarkerAreaPx: Double,
     val frameWidth: Int,
     val frameHeight: Int,
 )
