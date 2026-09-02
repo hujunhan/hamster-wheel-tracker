@@ -22,15 +22,18 @@ No marker detection or wheel tracking runs in the Android app yet. Those come in
 - JDK 17
 - built-in Kotlin support from AGP 9
 - CameraX 1.6.2
-- compile/target SDK 36
+- compile SDK 37
+- target SDK 36
 - minimum SDK 26
+
+`compileSdk` is newer than `targetSdk` deliberately: current AndroidX Core requires API 37 at compile time, while the app has not yet opted into Android 37 target-runtime behavior.
 
 The repository does not check in a Gradle wrapper binary yet. Android Studio can import `android/` as a Gradle project, while CI installs Gradle 9.5.0 explicitly.
 
 ## Run on the Motorola phone
 
 1. Open the `android/` directory in Android Studio.
-2. Let Gradle sync and install Android SDK 36 if prompted.
+2. Let Gradle sync and install Android SDK 37 if prompted.
 3. Enable Developer options and USB debugging on the phone.
 4. Connect the phone by USB and accept the debugging authorization dialog.
 5. Select the Motorola device and run the `app` configuration.
@@ -50,7 +53,7 @@ CameraX uses `STRATEGY_KEEP_ONLY_LATEST`. CameraX does not expose an exact count
 
 ## Command-line build
 
-With JDK 17, Android SDK 36, and Gradle 9.5 installed:
+With JDK 17, Android SDK 37, and Gradle 9.5 installed:
 
 ```bash
 gradle -p android :app:testDebugUnitTest :app:assembleDebug
