@@ -26,6 +26,7 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.hujunhan.hamsterwheeltracker.camera.AnalysisStats
 import com.hujunhan.hamsterwheeltracker.camera.CameraFrameAnalyzer
+import com.hujunhan.hamsterwheeltracker.tracking.TrackerSnapshot
 import com.hujunhan.hamsterwheeltracker.ui.DetectionOverlayView
 import com.hujunhan.hamsterwheeltracker.vision.CalibrationConfig
 import com.hujunhan.hamsterwheeltracker.vision.CalibrationStore
@@ -42,6 +43,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var statusView: TextView
     private lateinit var statsView: TextView
     private lateinit var detectionView: TextView
+    private lateinit var trackingView: TextView
     private lateinit var calibrationView: TextView
     private lateinit var toggleButton: Button
 
@@ -53,6 +55,7 @@ class MainActivity : ComponentActivity() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var tapMode = TapMode.NONE
     private var detectionUiCounter = 0
+    private var trackerUiCounter = 0
 
     @Volatile
     private var lastMarkerFrame: MarkerFrameResult? = null
@@ -98,6 +101,12 @@ class MainActivity : ComponentActivity() {
                 detectionUiCounter++
                 if (detectionUiCounter % 6 == 0) {
                     runOnUiThread { renderDetection(result) }
+                }
+            },
+            onTrackerSnapshot = { snapshot ->
+                trackerUiCounter++
+                if (trackerUiCounter % 6 == 0) {
+                    runOnUiThread { renderTracking(snapshot) }
                 }
             },
             onHsvSample = { sample -> runOnUiThread { applyMarkerSample(sample) } },
@@ -158,10 +167,12 @@ class MainActivity : ComponentActivity() {
         statusView = textView(Color.WHITE, 14f, "Starting vision pipeline…")
         statsView = textView(Color.LTGRAY, 13f, "Waiting for analysis frames…")
         detectionView = textView(Color.WHITE, 14f, "Marker: waiting…")
+        trackingView = textView(Color.WHITE, 14f, "Tracker: waiting for marker…")
         calibrationView = textView(Color.LTGRAY, 12f, "Calibration loading…")
         panel.addView(statusView)
         panel.addView(statsView)
         panel.addView(detectionView)
+        panel.addView(trackingView)
         panel.addView(calibrationView)
 
         toggleButton = Button(this).apply {
@@ -342,6 +353,35 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun renderTracking(snapshot: TrackerSnapshot) {
+        val session = snapshot.completedSession
+        trackingView.text = buildString {
+            append(
+                String.format(
+                    Locale.US,
+                    "Tracker: %s · running %s · reason %s\nDistance %.3f m · %.3f rev · speed %.3f m/s (display %.3f)",
+                    snapshot.trackingState.name,
+                    if (snapshot.running) "yes" else "no",
+                    snapshot.lastReason,
+                    snapshot.totalDistanceM,
+                    snapshot.equivalentRevolutions,
+                    snapshot.rawSpeedMS,
+                    snapshot.displaySpeedMS,
+                ),
+            )
+            if (session != null) {
+                append(
+                    String.format(
+                        Locale.US,
+                        "\nSession closed: %.2f m · %.1f s moving",
+                        session.distanceM,
+                        session.movingDurationSec,
+                    ),
+                )
+            }
+        }
+    }
+
     private fun renderCalibration() {
         calibrationView.text = String.format(
             Locale.US,
@@ -385,7 +425,7 @@ class MainActivity : ComponentActivity() {
                     ),
                 )
                 tapMode = TapMode.NONE
-                statusView.text = "Wheel center updated"
+                statusView.text = "Wheel center updated; tracker phase reset"
             }
             TapMode.SAMPLE_MARKER -> {
                 frameAnalyzer.requestHsvSample(point.x, point.y)
@@ -403,6 +443,7 @@ class MainActivity : ComponentActivity() {
         if (!analysisEnabled) {
             statsView.text = "Analysis paused; preview remains active."
             detectionView.text = "Marker detection paused."
+            trackingView.text = "Tracker paused with analysis."
         } else {
             statsView.text = "Analysis resumed; collecting frame statistics…"
         }
