@@ -30,6 +30,7 @@ import com.hujunhan.hamsterwheeltracker.vision.CalibrationConfig
 import com.hujunhan.hamsterwheeltracker.vision.CalibrationStore
 import com.hujunhan.hamsterwheeltracker.vision.HsvSample
 import com.hujunhan.hamsterwheeltracker.vision.MarkerFrameResult
+import com.hujunhan.hamsterwheeltracker.web.DashboardRuntimeSnapshot
 import com.hujunhan.hamsterwheeltracker.web.DashboardServer
 import com.hujunhan.hamsterwheeltracker.web.LanAddress
 import fi.iki.elonen.NanoHTTPD
@@ -82,6 +83,7 @@ class TrackingService : LifecycleService() {
     @Volatile private var serviceMessage = "Starting tracking service…"
     @Volatile private var dashboardUrl: String? = null
     @Volatile private var latestStats: AnalysisStats.Snapshot? = null
+    @Volatile private var latestStatsWallClockMs = 0L
     @Volatile private var latestMarkerFrame: MarkerFrameResult? = null
     @Volatile private var latestTrackerSnapshot: TrackerSnapshot? = null
 
@@ -195,6 +197,7 @@ class TrackingService : LifecycleService() {
             initialCalibration = calibration,
             onStats = { snapshot ->
                 latestStats = snapshot
+                latestStatsWallClockMs = System.currentTimeMillis()
                 listeners.forEach { it.onStats(snapshot) }
             },
             onMarkerFrame = { result ->
@@ -273,6 +276,21 @@ class TrackingService : LifecycleService() {
         val server = DashboardServer(
             dao = dao,
             liveProvider = { trackingRecorder.latest() },
+            runtimeProvider = {
+                val stats = latestStats
+                DashboardRuntimeSnapshot(
+                    serviceTracking = tracking,
+                    analysisEnabled = analysisEnabled,
+                    serviceMessage = serviceMessage,
+                    analysisFps = stats?.fps,
+                    frameWidth = stats?.width,
+                    frameHeight = stats?.height,
+                    latestFrameGapMs = stats?.latestGapMs,
+                    maxFrameGapMs = stats?.maxGapMs,
+                    totalFrames = stats?.totalFrames,
+                    lastAnalysisEpochMs = latestStatsWallClockMs.takeIf { it > 0L },
+                )
+            },
         )
         dashboardServer = server
         val error = runCatching {
