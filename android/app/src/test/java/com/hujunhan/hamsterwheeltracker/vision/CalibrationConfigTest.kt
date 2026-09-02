@@ -1,6 +1,7 @@
 package com.hujunhan.hamsterwheeltracker.vision
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CalibrationConfigTest {
@@ -13,6 +14,17 @@ class CalibrationConfigTest {
         assertEquals(364.8f, resolved.wheelRadiusPx, 0.01f)
         assertEquals(273.6f, resolved.expectedMarkerRadiusPx, 0.01f)
         assertEquals(43.776f, resolved.radiusTolerancePx, 0.01f)
+        assertEquals(30.0, resolved.minMarkerAreaPx, 0.001)
+        assertEquals(20904.0, resolved.maxMarkerAreaPx, 1.0)
+    }
+
+    @Test
+    fun `marker area upper bound grows with wheel size`() {
+        val small = CalibrationConfig(wheelRadiusNorm = 0.20f).resolved(1280, 960)
+        val large = CalibrationConfig(wheelRadiusNorm = 0.35f).resolved(1280, 960)
+
+        assertEquals(5000.0, small.maxMarkerAreaPx, 0.001)
+        assertTrue(large.maxMarkerAreaPx > 17000.0)
     }
 
     @Test
