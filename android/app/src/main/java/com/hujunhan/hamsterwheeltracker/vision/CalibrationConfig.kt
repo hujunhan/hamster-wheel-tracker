@@ -1,5 +1,7 @@
 package com.hujunhan.hamsterwheeltracker.vision
 
+import kotlin.math.PI
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -20,7 +22,11 @@ data class CalibrationConfig(
     val hsvLowerS: Int = 80,
     val hsvLowerV: Int = 50,
     val minAreaPx: Double = 30.0,
+    // Absolute floor for the maximum marker area. The effective upper bound is
+    // also allowed to scale with wheel size so a closer camera / larger stream
+    // does not reject the same physical sticker merely because it covers more pixels.
     val maxAreaPx: Double = 5000.0,
+    val maxAreaWheelFraction: Double = 0.05,
     val morphologyKernel: Int = 3,
     val effectiveDiameterMm: Float = 228.6f,
 ) {
@@ -29,28 +35,35 @@ data class CalibrationConfig(
         val wheelRadius = wheelRadiusNorm.coerceIn(0.1f, 0.49f) * shortSide
         val pathRatio = markerPathRadiusRatio.coerceIn(0.2f, 0.98f)
         val toleranceRatio = radiusToleranceRatio.coerceIn(0.01f, 0.4f)
+        val wheelDiskAreaPx = PI * wheelRadius * wheelRadius
+        val adaptiveMaxArea = wheelDiskAreaPx * maxAreaWheelFraction.coerceIn(0.001, 0.25)
         return ResolvedCalibration(
             centerX = centerXNorm.coerceIn(0f, 1f) * frameWidth,
             centerY = centerYNorm.coerceIn(0f, 1f) * frameHeight,
             wheelRadiusPx = wheelRadius,
             expectedMarkerRadiusPx = wheelRadius * pathRatio,
             radiusTolerancePx = wheelRadius * toleranceRatio,
+            minMarkerAreaPx = minAreaPx,
+            maxMarkerAreaPx = max(maxAreaPx, adaptiveMaxArea),
             frameWidth = frameWidth,
             frameHeight = frameHeight,
         )
     }
 
-    fun withMarkerSample(h: Int, s: Int, v: Int): CalibrationConfig {
-        val hue = h.coerceIn(0, 179)
-        // The intended marker is green/blue/pink rather than red, so the first
-        // Android pass can use a simple non-wrapping hue interval.
-        val lowerH = (hue - 12).coerceAtLeast(0)
-        val upperH = (hue + 12).coerceAtMost(179)
+    /**
+     * Builds forgiving initial bounds from the median of an 11x11 live patch.
+     * The annulus is the stronger spatial discriminator, so color sampling is
+     * intentionally broad enough to tolerate Android ISP/AWB variation.
+     */
+    fun withMarkerSample(sample: HsvSample): CalibrationConfig {
+        val hue = sample.h.coerceIn(0, 179)
+        val lowerH = (hue - 15).coerceAtLeast(0)
+        val upperH = (hue + 15).coerceAtMost(179)
         return copy(
             hsvLowerH = lowerH,
             hsvUpperH = upperH,
-            hsvLowerS = (s - 80).coerceIn(40, 255),
-            hsvLowerV = (v - 80).coerceIn(30, 255),
+            hsvLowerS = (sample.s - 60).coerceIn(25, 255),
+            hsvLowerV = (sample.v - 60).coerceIn(20, 255),
         )
     }
 }
@@ -61,8 +74,15 @@ data class ResolvedCalibration(
     val wheelRadiusPx: Float,
     val expectedMarkerRadiusPx: Float,
     val radiusTolerancePx: Float,
+    val minMarkerAreaPx: Double,
+    val maxMarkerAreaPx: Double,
     val frameWidth: Int,
     val frameHeight: Int,
 )
 
-data class HsvSample(val h: Int, val s: Int, val v: Int)
+data class HsvSample(
+    val h: Int,
+    val s: Int,
+    val v: Int,
+    val sampleCount: Int = 1,
+)
