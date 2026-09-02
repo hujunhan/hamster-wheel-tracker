@@ -1,79 +1,82 @@
 # Android Product
 
-This directory contains the primary Android implementation of Hamster Wheel Tracker.
+This directory contains the primary Android implementation of Hamster Wheel Tracker for the dedicated Android 12 phone.
 
-## Current M0 scope
-
-The first Android milestone intentionally stops at camera acquisition and telemetry:
+## Current runtime
 
 ```text
-CameraX Preview
-    +
-ImageAnalysis (1280x720 target, KEEP_ONLY_LATEST)
-    -> frame timestamp / size / FPS diagnostics
+CameraX ImageAnalysis (foreground service)
+        ↓
+OpenCV HSV marker detector
+        ↓
+Wheel tracker
+        ↓
+Room/SQLite 1-second activity + sessions
+        ↓
+LAN dashboard on :8080
 ```
 
-No marker detection or wheel tracking runs in the Android app yet. Those come in #15 and #16. Keeping the camera source independent is deliberate so real, recorded, or synthetic frames can drive the same downstream detector later.
+The visible `MainActivity` owns only the preview/calibration UI. Long-running analysis is owned by `TrackingService`, so backgrounding the UI or turning the screen off does not intentionally stop tracking.
 
 ## Target device and toolchain
 
-The dedicated phone runs Android 12, so M0 targets Android 12 directly instead of following the newest Android SDK/runtime behavior.
-
 - Android 12 target/minimum: API 31
-- compile SDK 34 (stable build SDK only)
+- compile SDK 34
 - Android Gradle Plugin 8.5.2
 - Gradle 8.7
 - Kotlin 1.9.24
 - JDK 17
 - CameraX 1.4.2
-- Activity 1.9.3
-- AndroidX Core 1.13.1
+- OpenCV 4.10.0
+- Room 2.6.1
 
-`compileSdk = 34` does not require the phone to run Android 14; it only defines the API surface used while compiling. Runtime behavior is intentionally pinned to `targetSdk = 31` for the Android 12 device.
+`compileSdk = 34` is only the build API surface; the dedicated phone remains Android 12 / target API 31.
 
-The repository does not check in a Gradle wrapper binary yet. Android Studio can import `android/` as a Gradle project, while CI installs Gradle 8.7 explicitly.
+## Always-on behavior
+
+When **Start tracking** is active:
+
+- a camera foreground service owns `ImageAnalysis`;
+- Android shows a persistent `Hamster wheel tracking` notification;
+- a partial wake lock keeps CPU analysis alive while the screen is off;
+- the Activity uses `FLAG_KEEP_SCREEN_ON`, so normal screen timeout is disabled while the UI is visible;
+- manually locking the phone/backgrounding the app leaves tracking in the foreground service;
+- the notification has a **Stop** action that releases camera analysis, recorder, dashboard server, executor, and wake lock;
+- Room history survives Activity/process recreation;
+- the LAN dashboard remains available while the tracking service is active.
+
+The phone is intended to remain plugged in overnight. For the dedicated Motorola device, also set Android battery usage for Hamster Wheel Tracker to **Unrestricted** if the OS offers that option; OEM battery policy can otherwise be more aggressive than standard Android foreground-service behavior.
+
+No camera images or video are stored by default.
 
 ## Run on the Motorola phone
 
-1. Open the `android/` directory in Android Studio.
-2. Let Gradle sync and install Android SDK 34 if prompted.
-3. Enable Developer options and USB debugging on the Android 12 phone.
-4. Connect the phone by USB and accept the debugging authorization dialog.
-5. Select the Motorola device and run the `app` configuration.
-6. Grant camera permission.
+1. Open `android/` in Android Studio.
+2. Use Gradle wrapper 8.7 and JDK 17.
+3. Enable USB debugging and connect the Android 12 phone.
+4. Run the `app` configuration and grant camera permission.
+5. Confirm the persistent tracking notification appears.
+6. Confirm the debug UI shows analysis near the expected FPS and a LAN dashboard URL.
+7. Lock the screen for several minutes, unlock, and verify frame/tracker counters continued rather than restarting from zero.
+8. For overnight acceptance, leave it plugged in and verify Room/dashboard history the next morning.
 
-The debug screen should show:
+## Dashboard
 
-- live rear-camera preview
-- actual `ImageAnalysis` FPS
-- actual analysis frame width/height
-- total analyzed frame count
-- latest/max inter-frame gap
-- flash availability and exposure-compensation range
-- a Pause/Resume Analysis button while preview stays active
+While tracking is active, the app shows a URL similar to:
 
-CameraX uses `STRATEGY_KEEP_ONLY_LATEST`. CameraX does not expose an exact count of internally dropped frames, so the UI reports measured frame gaps instead of inventing a drop count.
+```text
+http://192.168.1.123:8080/
+```
+
+Open it from another phone/tablet/computer on the same Wi-Fi to view current-night and historical statistics.
 
 ## Command-line build
 
-With JDK 17, Android SDK 34, and Gradle 8.7 installed:
+With JDK 17 and Android SDK 34 installed:
 
 ```bash
-gradle -p android :app:testDebugUnitTest :app:assembleDebug
+cd android
+./gradlew :app:testDebugUnitTest :app:assembleDebug
 ```
-
-The Android GitHub Actions job executes the same test/build path and uploads the debug APK as an artifact.
-
-## Physical acceptance still required
-
-CI can prove that the project compiles and unit tests pass, but #14 stays open until the real Motorola phone confirms:
-
-- preview and analysis work on-device
-- practical measured FPS/resolution
-- 30-minute camera/analyzer soak test
-- no analyzer stall/leak
-- screen off/on lifecycle returns cleanly
-
-Long-running camera use while the app is backgrounded belongs to #17 (foreground tracking service), not this milestone.
 
 See [`../docs/android.md`](../docs/android.md) for the larger Android architecture.
