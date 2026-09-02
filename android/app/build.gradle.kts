@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.kapt")
 }
 
 android {
@@ -39,6 +40,7 @@ android {
 
 dependencies {
     val cameraXVersion = "1.4.2"
+    val roomVersion = "2.6.1"
 
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.core:core-ktx:1.13.1")
@@ -47,6 +49,12 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$cameraXVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraXVersion")
     implementation("androidx.camera:camera-view:$cameraXVersion")
+
+    implementation("androidx.room:room-runtime:$roomVersion")
+    kapt("androidx.room:room-compiler:$roomVersion")
+
+    // Small embedded HTTP server used for the read-only LAN dashboard.
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
 
     // Official OpenCV Android AAR from Maven Central. 4.10 is intentionally
     // conservative for the dedicated Android 12 device.
