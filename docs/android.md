@@ -1,302 +1,91 @@
-# Android Implementation Plan
+# Android architecture
 
-Android is the primary product platform for Hamster Wheel Tracker.
+Hamster Wheel Tracker is an Android-only application for a dedicated Android 12 phone mounted in front of the wheel.
 
-The goal is not to rewrite the project from scratch. The existing Python implementation defines the tracking semantics and supplies simulation, reference outputs, failure cases, and debug tooling. Android replaces the deployment/runtime/UI layer and ports the required real-time vision/tracking behavior.
+## Ownership model
 
-## 1. Responsibilities
+The key design decision is that the UI does not own tracking.
 
-### Android / Kotlin
+`TrackingService` is a started + bound foreground service and owns:
 
-Owns:
+- CameraX `ImageAnalysis` and the optional preview use case;
+- OpenCV marker detection;
+- wheel/session tracking;
+- Room persistence;
+- embedded LAN dashboard;
+- a partial wake lock while tracking;
+- the persistent tracking notification.
 
-- CameraX preview and `ImageAnalysis`
-- Camera2 interop when exposure/AWB/focus control is needed and supported
-- runtime permissions and lifecycle
-- foreground tracking service
-- persistent notification / Start / Stop controls
-- Room / SQLite persistence
-- native calibration/debug UI
-- native dashboard/history UI
-- app/process recreation behavior
+`MainActivity` owns only the visible controls, overlay and `PreviewView`. When visible it attaches the preview surface to the service; when stopped it detaches the surface without stopping analysis.
 
-### Tracker / vision core
+This makes explicit screen-off/background operation a normal runtime state instead of a lifecycle accident.
 
-Owns platform-independent behavior:
+## Camera pipeline
 
-- calibrated wheel geometry
-- HSV marker candidate selection
-- annulus filtering
-- angular tracking
-- partial-distance accumulation
-- direction reversals
-- plausibility checks
-- `SEARCHING` / `TRACKING` / `PREDICTING` / `UNCERTAIN`
-- high-speed gap phase-ambiguity handling
-- speed/session semantics
+CameraX uses the Camera2 backend with:
 
-The preferred initial implementation is a small C++17 core behind JNI where that provides clean reuse and performance. This is not a requirement to port every Python class to C++: Kotlin is appropriate for simple orchestration when it keeps the boundary cleaner.
+- rear camera;
+- approximately 1280×720 requested analysis resolution (the target phone currently selects 1280×960);
+- `ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST`;
+- RGBA output for OpenCV processing;
+- one dedicated analysis executor.
 
-### Python reference stack
+The measured target-phone rate is approximately 30 FPS.
 
-Continues to own:
+## Vision
 
-- fast algorithm prototyping
-- deterministic coordinate simulations
-- rendered BGR synthetic-frame simulations
-- regression/failure-mode tests
-- reference statistics and expected outputs
-- optional FastAPI/SQLite debugging tools
+The marker detector converts each frame to HSV and applies:
 
-## 2. Target Runtime Flow
+1. configured hue/saturation/value thresholds;
+2. morphology;
+3. contour extraction;
+4. minimum/maximum contour area filtering;
+5. expected radial-annulus filtering around the calibrated wheel center;
+6. candidate scoring and selection.
 
-```text
-Android activity / UI
-        |
-        +---- calibration/debug
-        |
-        +---- Start Tracking
-                   |
-                   v
-        camera foreground service
-                   |
-              CameraX
-                   |
-             ImageAnalysis
-                   |
-          marker detector/core
-                   |
-            tracker snapshot
-                   |
-          aggregation/sessions
-                   |
-             Room/SQLite
-                   |
-        dashboard/history UI
-```
+The UI can sample an HSV patch directly from the live marker. The annulus constraint is intentionally strong, so HSV bounds can remain relatively forgiving under phone ISP/AWB changes.
 
-The camera source must remain replaceable so recorded or synthetic frames can drive the same analyzer during development.
+## Tracking
 
-## 3. Frame Strategy
-
-Do not assume that the phone's full sensor resolution should be processed.
-
-Initial target:
-
-- analysis resolution around 720p class
-- 15–30 FPS
-- keep only the latest useful frame if processing falls behind
-- avoid unnecessary frame copies/conversions
-
-The actual choice should be measured on the Motorola phone using centroid stability, motion blur, CPU load, and sustained thermal behavior.
-
-## 4. Camera Controls
-
-The marker detector benefits more from stable imaging than from sophisticated CV.
-
-Where supported, evaluate:
-
-- exposure/ISO stability
-- auto-exposure lock or bounded manual exposure
-- white-balance lock or stable AWB behavior
-- fixed/appropriate focus
-- frame duration / FPS consistency
-
-The product should not assume every Motorola model exposes the same manual-camera capabilities. Calibration/debug UI should reveal enough state to diagnose drift.
-
-## 5. Color/Frame Representation
-
-CameraX `ImageAnalysis` commonly exposes YUV camera frames. The implementation should minimize conversions.
-
-Possible paths:
-
-1. convert the analysis ROI to RGB/BGR/HSV for a straightforward first implementation
-2. later optimize conversion/thresholding if profiling shows it matters
-3. keep the tracking resolution modest before adding native optimization complexity
-
-Correctness and debuggability are higher priority than early micro-optimization.
-
-## 6. Native Core Decision
-
-Preferred first architecture:
+The accepted marker centroid becomes an angular observation:
 
 ```text
-Kotlin CameraX / service / Room / UI
-                 |
-                JNI
-                 |
-          C++17 vision/tracker core
+angle = atan2(markerY - centerY, markerX - centerX)
 ```
 
-Benefits:
+`WheelTracker` unwraps plausible inter-frame motion, accumulates absolute angular travel, computes speed, handles short marker gaps, and enters `UNCERTAIN` when a gap could conceal more than an unambiguous phase change.
 
-- clean future reuse on Linux/Raspberry Pi/Jetson if desired
-- natural OpenCV/C++ implementation path
-- separates Android lifecycle from mathematical tracking behavior
+The safety rule is important: when hidden motion cannot be inferred uniquely, the tracker reacquires phase without inventing revolutions. This can under-count an ambiguous interval, but cannot fabricate distance.
 
-Costs:
+`SessionTracker` groups moving intervals into user-visible running sessions using hysteresis/pause handling.
 
-- NDK/CMake/JNI build complexity
-- Android OpenCV packaging complexity
-- debugging across the language boundary
+## Persistence
 
-Decision rule: keep JNI narrow. If the native boundary becomes more complex than the tracker itself, implement the simple tracker logic in Kotlin and retain cross-platform test vectors as the source of truth.
+`TrackingRecorder` receives tracker snapshots and converts cumulative tracker state into additive one-second buckets on a dedicated persistence executor.
 
-## 7. Persistence Mapping
+Room stores:
 
-The Python schema/queries provide the semantic reference.
+- one-second activity samples;
+- completed sessions.
 
-Android will use Room/SQLite for:
+Stored metrics include distance, equivalent revolutions, moving duration, uncertainty duration and maximum speed. A lifecycle or wall-clock discontinuity does not manufacture activity across the gap.
 
-### Activity samples
+Reporting uses local 18:00 → next-day 18:00 night boundaries.
 
-- timestamp
-- interval duration
-- moving duration
-- distance delta
-- signed-angle delta
-- angular-travel delta
-- max/display speed as defined by the model
-- running flag
-- tracking state
-- detection quality
+## Dashboard
 
-### Sessions
+An embedded NanoHTTPD server listens on port 8080 while tracking is active. It serves a read-only, self-contained mobile web dashboard over the LAN. No cloud service is required.
 
-- start/end
-- duration
-- moving duration
-- distance
-- equivalent revolutions
-- average speed
-- maximum speed
+The server exposes current-night summary/live state, hourly activity, sessions and recent-night history. Camera frames are not stored or served.
 
-### Calibration/config
+## Power and lifecycle
 
-- frame/wheel geometry
-- effective running diameter
-- marker annulus
-- HSV bounds and detector thresholds
-- runtime/calibration metadata as needed
+While tracking:
 
-The default reporting night remains local 18:00 -> next-day 18:00 until made configurable.
+- Android foreground-service notification remains visible;
+- service type is `camera`;
+- a partial wake lock keeps CPU analysis work available while the screen is off;
+- Activity screen timeout is disabled while the UI is visible;
+- stopping tracking releases camera use cases, wake lock, persistence worker and dashboard server.
 
-## 8. Background Behavior
-
-The product model is user-started continuous tracking, not an unrestricted Linux daemon.
-
-Expected flow:
-
-```text
-open app
--> Start Tracking
--> camera foreground service + persistent notification
--> screen may turn off / UI may background
--> tracking continues
--> Stop Tracking releases camera/service
-```
-
-Do not design around silently starting the camera at boot. Respect Android camera/foreground-service restrictions and make the active camera state visible to the user.
-
-For the intended home setup, the tracking phone normally remains connected to power.
-
-## 9. Cross-Platform Parity
-
-Android should not rely on subjective visual comparison to decide whether the port is correct.
-
-Shared/reference cases should cover:
-
-- quarter turn
-- full clockwise/counterclockwise turns
-- wrap boundary
-- forward + reverse travel
-- stationary centroid jitter
-- irregular timestamps
-- implausible jumps
-- short safe occlusion
-- high-speed ambiguous occlusion
-- long ambiguous occlusion
-- session pause grouping
-- exact moving-duration aggregation
-- reporting-night summaries
-
-The high-speed marker-gap regression discovered by the rendered-frame simulation is mandatory: Android must never interpret an ambiguous >pi hidden phase change as a confident reverse motion.
-
-## 10. Android Milestones
-
-### #14 — CameraX frame pipeline
-
-First usable Android code:
-
-- Gradle/Kotlin project
-- live preview
-- `ImageAnalysis`
-- FPS/size diagnostics
-- sustained capture test
-
-### #15 — Real-camera marker detection + calibration
-
-- detector on Motorola frames
-- native geometry/HSV calibration
-- marker color sampling
-- accepted/rejected overlay
-- actual nighttime tuning
-
-### #16 — Tracker-core parity
-
-- Android/native implementation of tracker semantics
-- deterministic parity cases
-- display-speed smoothing
-- ambiguity regressions
-
-### #17 — Foreground service + Room
-
-- screen-off/background tracking after explicit user start
-- persistent notification
-- aggregated storage
-- sessions/history
-- process-restart persistence
-
-### #18 — Native dashboard/history
-
-- current-night metrics
-- hourly/timeline views
-- sessions/history
-- uncertainty UX
-- navigation to calibration/service controls
-
-## 11. Repository Plan
-
-```text
-android/
-  Android Gradle project (created in #14)
-
-src/hamster_tracker/
-  Python reference implementation
-
-scripts/
-  reference simulations and stress tools
-
-tests/
-  Python reference/regression tests
-
-docs/
-  platform-neutral and Android design docs
-
-deploy/
-  optional/deferred Linux systemd backend
-```
-
-Do not perform a large directory migration just for appearance. Keeping the tested Python package paths stable avoids unnecessary regression risk while Android is being established.
-
-## 12. First Development Checkpoint
-
-The first meaningful Android checkpoint is deliberately small:
-
-1. build/install the app
-2. show the real Motorola camera preview
-3. receive 720p-class analysis frames at a measured stable rate
-4. keep analysis alive for 30 minutes
-5. save one debug frame / expose frame metadata if useful
-
-Only after that should real detector tuning dictate the Camera2 exposure/AWB requirements.
+For the dedicated device, Android battery optimization should be set to Unrestricted and the phone is expected to remain plugged in overnight.

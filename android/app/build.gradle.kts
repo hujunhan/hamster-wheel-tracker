@@ -32,10 +32,6 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-
-    sourceSets {
-        getByName("test").resources.srcDir("../../shared/test-vectors")
-    }
 }
 
 dependencies {
@@ -54,11 +50,7 @@ dependencies {
     implementation("androidx.room:room-runtime:$roomVersion")
     kapt("androidx.room:room-compiler:$roomVersion")
 
-    // Small embedded HTTP server used for the read-only LAN dashboard.
     implementation("org.nanohttpd:nanohttpd:2.3.1")
-
-    // Official OpenCV Android AAR from Maven Central. 4.10 is intentionally
-    // conservative for the dedicated Android 12 device.
     implementation("org.opencv:opencv:4.10.0")
 
     testImplementation("junit:junit:4.13.2")

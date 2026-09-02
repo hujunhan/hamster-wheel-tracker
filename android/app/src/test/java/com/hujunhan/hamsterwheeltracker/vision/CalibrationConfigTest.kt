@@ -23,8 +23,11 @@ class CalibrationConfigTest {
         val small = CalibrationConfig(wheelRadiusNorm = 0.20f).resolved(1280, 960)
         val large = CalibrationConfig(wheelRadiusNorm = 0.35f).resolved(1280, 960)
 
-        assertEquals(5000.0, small.maxMarkerAreaPx, 0.001)
+        // The adaptive limit is 5% of the calibrated wheel disk area. Even the
+        // 0.20 short-side wheel is already above the absolute 5000 px floor.
+        assertTrue(small.maxMarkerAreaPx > 5700.0)
         assertTrue(large.maxMarkerAreaPx > 17000.0)
+        assertTrue(large.maxMarkerAreaPx > small.maxMarkerAreaPx)
     }
 
     @Test
