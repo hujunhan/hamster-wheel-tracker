@@ -1,147 +1,188 @@
 # Hamster Wheel Tracker
 
-A lightweight computer-vision system that runs on a **Jetson Nano** and measures hamster wheel activity from a single colored marker attached to the wheel.
+A vision-based hamster wheel activity tracker that measures wheel motion from a single colored marker.
+
+**Android is now the primary deployment target.** An unused Motorola phone provides the camera, compute, storage, battery backup, Wi-Fi, and user interface in one device. The existing Python implementation remains in this repository as a **reference implementation, simulator, test oracle, and optional Linux backend**.
 
 The project is intended to be useful as a real home monitoring tool first, while also remaining a clean computer-vision / embedded-systems portfolio project.
 
-## MVP Goal
+## Current Direction
 
-Run continuously on a Jetson Nano, observe a fixed 9-inch hamster wheel with a camera, estimate wheel rotation from a colored marker, store activity statistics, and expose a mobile-friendly dashboard over the local network.
+```text
+                    Hamster Wheel Tracker
+                           |
+             +-------------+-------------+
+             |                           |
+       Android product              Python reference
+             |                           |
+     CameraX / Camera2              simulation / tests
+     Kotlin app/runtime             OpenCV reference CV
+     native calibration            SQLite + FastAPI tools
+     foreground service            synthetic stress tests
+     Room / SQLite
+             |
+      tracker behavior
+     validated against the
+       reference stack
+```
 
-No neural network is required for the MVP. The core tracker uses classical computer vision and wheel geometry.
+Platform status:
 
-## Target Hardware
+- **Android / Motorola phone — primary product path**
+- **Python — active reference/simulation/debug stack**
+- **Jetson/Linux — optional/deferred backend; existing work is preserved**
 
-- Jetson Nano
-- Camera mounted approximately along the wheel rotation axis
+The platform pivot does not change the core tracking model. Wheel geometry, marker detection rules, phase ambiguity handling, session semantics, reporting-night statistics, and synthetic test cases remain valid.
+
+## Why Android
+
+For this workload, a spare Android phone is a strong embedded-vision platform:
+
+- integrated and vendor-tuned camera/ISP
+- sufficient CPU for classical CV at 720p-class analysis resolution
+- built-in Wi-Fi, storage, display, battery, and power management
+- no separate CSI camera, SD card, Wi-Fi adapter, or JetPack compatibility requirement
+- native UI can combine tracking, calibration, history, and diagnostics
+
+The main Android-specific engineering challenges are camera lifecycle/control and reliable long-running foreground-service behavior rather than compute performance.
+
+## Physical Setup
+
 - Fixed 9-inch wheel (228.6 mm nominal diameter)
-- One high-saturation colored marker attached to the wheel
-- Low-to-moderate continuous nighttime lighting
+- Camera faces the circular side of the wheel approximately head-on
+- Camera optical axis approximately parallel to the wheel rotation axis
+- Wheel occupies most of the analysis frame while remaining fully visible
+- One high-saturation colored marker on the camera-visible side
+- Recommended marker-center radius: roughly **0.75 × wheel radius**
+- Stable low-to-moderate nighttime lighting
 
-## Recommended Physical Setup
-
-- Camera faces the **circular side of the wheel head-on**.
-- Camera optical axis should be approximately parallel to the wheel rotation axis.
-- Wheel center should be near the image center.
-- Wheel diameter should occupy roughly 70-80% of the image height.
-- Marker should be placed on the camera-visible side at roughly **0.75 × wheel radius** from the center.
-- Avoid placing the marker near the hub or exactly on the outer rim.
-- Prefer a marker location where the hamster cannot easily touch or obscure it.
+The effective running diameter remains configurable because the hamster's physical running path may differ slightly from the nominal plastic-wheel diameter.
 
 ## Tracking Principle
 
-For every frame, detect the colored marker centroid `(mx, my)` and calculate its angle relative to the calibrated wheel center `(cx, cy)`:
+For every trusted marker centroid `(mx, my)`, calculate its angle around the calibrated wheel center `(cx, cy)`:
 
 ```text
 angle = atan2(my - cy, mx - cx)
 ```
 
-The tracker unwraps consecutive angles and estimates incremental wheel motion.
+A full revolution is **not required**. Partial rotation contributes immediately.
 
-A full revolution is **not required**. Partial rotations are measured continuously.
-
-For hamster running distance, the important quantity is total wheel motion:
+Running distance uses total angular travel rather than net rotation:
 
 ```text
 total angular travel = sum(abs(delta_angle))
 distance = effective_radius * total angular travel
 ```
 
-This intentionally differs from net rotation. For example, if the wheel rotates forward and then backward, both motions contribute to physical running distance.
+Forward and backward motion therefore both contribute to physical running distance.
 
-## MVP Metrics
+### Ambiguous marker loss
 
-- Total distance
-- Total revolutions / equivalent revolutions
-- Running time
-- Average running speed
-- Maximum speed
-- Distance by minute / hour
-- Speed timeline
-- Running sessions
-- Longest continuous session
-- Session distance, duration, average speed, and maximum speed
-- Forward / backward wheel motion where reliably detectable
-
-## Proposed Pipeline
+The tracker explicitly distinguishes:
 
 ```text
-Camera
-  -> ROI / calibrated wheel region
-  -> HSV color segmentation
+SEARCHING
+TRACKING
+PREDICTING
+UNCERTAIN
+```
+
+Short gaps may preserve phase when the motion remains unambiguous. If a hidden interval can cross a half-turn phase boundary, or the gap becomes otherwise ambiguous, the tracker enters `UNCERTAIN` and reacquires without inventing hidden revolutions.
+
+The project deliberately prefers **explicit undercounting over fabricated distance**.
+
+## Product Pipeline
+
+The Android target is:
+
+```text
+CameraX / Camera2
+  -> analysis frame
+  -> HSV marker segmentation
+  -> morphology / candidates
+  -> wheel-annulus validity checks
   -> marker centroid
-  -> geometric validity checks
-  -> angular tracking + unwrap
-  -> motion / speed estimation
-  -> session tracking
-  -> time aggregation
-  -> SQLite
-  -> FastAPI
-  -> mobile dashboard
+  -> angular tracker + uncertainty state machine
+  -> speed / sessions / one-second aggregation
+  -> Room / SQLite
+  -> native Android dashboard + calibration UI
 ```
 
-## Calibration
+No neural network is required for the MVP.
 
-The browser calibration page is available at:
+## Android Architecture
 
-```text
-/calibration
-```
+The Android application/runtime layer will be Kotlin.
 
-The hardware-independent version already supports:
+The current preferred core strategy is a narrow C++17/JNI boundary for reusable vision/tracking logic where it provides clear value, while keeping camera lifecycle, foreground service, persistence, and UI native to Android. This is a preference rather than a hard constraint: deterministic parity with the reference implementation matters more than maximizing native-code percentage.
 
-1. clicking the wheel center
-2. clicking the wheel edge to derive image-space radius
-3. clicking the marker position to derive its radius ratio
-4. previewing the accepted marker annulus
-5. editing the effective running diameter
-6. editing HSV lower/upper bounds
-7. validating and atomically persisting the configuration
+See [`docs/android.md`](docs/android.md) for the implementation plan.
 
-The preview currently uses a synthetic 1280×720 background because the Jetson camera is not available during development. The same overlay/interaction model is intended to sit on top of the live camera frame later.
+### Android roadmap
 
-Configuration defaults to `config.json` and can be overridden with:
+- [#14](https://github.com/hujunhan/hamster-wheel-tracker/issues/14) — CameraX app scaffold and frame pipeline
+- [#15](https://github.com/hujunhan/hamster-wheel-tracker/issues/15) — real-camera marker detection and calibration
+- [#16](https://github.com/hujunhan/hamster-wheel-tracker/issues/16) — tracker-core port and cross-platform parity
+- [#17](https://github.com/hujunhan/hamster-wheel-tracker/issues/17) — foreground tracking service and Room persistence
+- [#18](https://github.com/hujunhan/hamster-wheel-tracker/issues/18) — native activity dashboard and history UI
 
-```bash
-HAMSTER_TRACKER_CONFIG=/path/to/config.json
-```
+## Reusable Python Reference Stack
 
-Calibration should ultimately be performed under lighting similar to actual nighttime operation. Real camera marker-color sampling and live detection verification remain hardware-dependent.
+The existing implementation under `src/hamster_tracker/` remains intentionally active. It provides:
 
-## Robustness Principles
+- wheel geometry and wrapped angular differences
+- HSV marker detector with expected-annulus filtering
+- partial-rotation and direction-aware distance tracking
+- safe phase reinitialization and uncertainty handling
+- session hysteresis and short-pause grouping
+- one-second activity aggregation with exact moving duration
+- SQLite persistence and summary/history queries
+- FastAPI dashboard and browser calibration reference UI
+- coordinate-level synthetic trajectories
+- pixel-level synthetic BGR frame rendering
+- OpenCV detector/tracker regression tests
 
-- Do not count only complete revolutions.
-- Do not estimate wheel distance by summing marker pixel displacement.
-- Reject detections far from the expected marker-radius annulus.
-- Treat short marker dropouts as recoverable tracking gaps.
-- Do not invent rotation during long ambiguous occlusions.
-- Prefer physical camera placement and lighting that reduce ambiguity before adding algorithmic complexity.
+It is not throwaway prototype code. It serves as a behavioral oracle for the Android implementation and remains useful for algorithm experiments and failure-mode reproduction.
 
-## Planned Stack
+## Run the Reference Tests
 
-- Python
-- OpenCV
-- NumPy
-- SQLite
-- FastAPI
-- HTML / CSS / lightweight JavaScript
-- Jetson Nano camera capture stack
-
-React and neural-network inference are intentionally out of scope for the MVP.
-
-## Development Without Camera Hardware
-
-The tracking/storage path can be developed and tested with synthetic marker trajectories before the Jetson camera is available.
+Install the development dependencies and run the hardware-independent suite:
 
 ```bash
 python -m pip install -e ".[dev]"
 python -m pytest -q
+```
+
+Run the synthetic night simulation:
+
+```bash
 python scripts/simulate_night.py --overwrite
 ```
 
-The simulator exercises forward running, stops, direction reversal, pixel jitter, short marker occlusion, and a deliberately ambiguous long occlusion. It passes observations through the same `TrackerEngine`, session logic, one-second aggregation, and SQLite persistence intended for the real camera pipeline.
+Run the pixel-level OpenCV stress simulation:
 
-Start the mobile dashboard against the generated database:
+```bash
+python -m pip install -e ".[vision]"
+python scripts/simulate_vision.py
+```
+
+The pixel-level path renders actual BGR frames and exercises:
+
+```text
+BGR frame
+  -> HSV
+  -> threshold / morphology
+  -> contour centroid
+  -> annulus filtering
+  -> TrackerEngine
+```
+
+This test infrastructure has already exposed a real high-speed marker-dropout phase-ambiguity bug and now protects that behavior with regression tests.
+
+## Reference Dashboard
+
+The FastAPI dashboard remains useful for synthetic-data inspection and algorithm debugging:
 
 ```bash
 HAMSTER_TRACKER_DB=data/synthetic-night.db \
@@ -156,91 +197,65 @@ http://<computer-ip>:8000
 http://<computer-ip>:8000/calibration
 ```
 
-The dashboard currently includes:
+The reference dashboard includes current-night distance/moving time, equivalent revolutions, average/max speed, hourly activity, speed timeline, sessions, history, and explicit uncertainty warnings.
 
-- current tracker/running state
-- current-night distance and moving time
-- equivalent revolutions
-- average and maximum speed
-- longest session and session count
-- distance-by-hour chart
-- speed timeline
-- session list
-- recent-night history
-- explicit warning for intervals where tracking was `UNCERTAIN`
+A reporting **night** currently runs from local **18:00 to 18:00 the next day** so overnight hamster activity is not split at midnight.
 
-A reporting **night** currently runs from local **18:00 to 18:00 the next day**. This prevents a single overnight hamster session from being split at midnight. The rollover hour can become a user setting later.
+## Metrics
 
-Useful JSON endpoints include:
+- Total distance
+- Equivalent revolutions
+- Running / moving time
+- Average running speed
+- Maximum speed
+- Hourly activity/distance
+- Speed/activity timeline
+- Running sessions
+- Longest session
+- Per-session distance, duration, average speed, and maximum speed
+- Tracking uncertainty intervals
+- Forward/backward wheel motion where reliably detectable
+
+## Repository Roles
 
 ```text
-GET  /api/dashboard
-GET  /api/dashboard?night=YYYY-MM-DD
-GET  /api/status
-GET  /api/history?days=7
-GET  /api/sessions
-GET  /api/health
-GET  /api/calibration
-POST /api/calibration
+android/
+  Android product implementation (starts with roadmap/scaffold docs)
+
+src/hamster_tracker/
+  Python reference implementation and debug backend
+
+scripts/
+  simulations, stress tests, and reference tooling
+
+tests/
+  Python reference/regression tests
+
+docs/
+  platform-neutral design, Android plan, and preserved Linux/Jetson deployment notes
+
+deploy/
+  existing optional Linux/systemd deployment support
 ```
 
-## Development Milestones
-
-### M0 - Camera and Geometry
-
-- Reliable Jetson camera capture
-- Debug preview
-- Wheel ROI / geometry representation
-
-### M1 - Marker Detection
-
-- HSV marker segmentation
-- Marker centroid extraction
-- Detection quality filtering
-- Debug overlay
-
-### M2 - Rotation Tracker
-
-- Angular tracking
-- Angle unwrap
-- Partial-rotation measurement
-- Equivalent revolution count
-- RPM / angular speed
-- Distance accumulation
-
-### M3 - Robust Tracking and Sessions
-
-- Marker-loss handling
-- Short-gap recovery
-- Outlier rejection
-- Running / stopped state
-- Session segmentation
-
-### M4 - Persistence and Statistics
-
-- SQLite schema
-- One-second (or similar) aggregation
-- Session records
-- nightly summaries
-
-### M5 - Calibration and Mobile Web UI
-
-- Mobile current-night dashboard (implemented)
-- Night/session history (implemented)
-- Interactive geometry/HSV calibration with persistent config (implemented)
-- Live camera preview (hardware-dependent)
-- Click-to-sample real marker color (hardware-dependent)
-- Live accepted/rejected detection overlay (hardware-dependent)
-
-### M6 - Jetson Deployment
-
-- Automatic startup
-- Crash restart
-- LAN access
-- Stable long-running operation
+The Python source is intentionally not moved into a `legacy/` directory: it remains an active reference and CI target.
 
 ## Project Status
 
-The hardware-independent tracker, synthetic simulator, SQLite persistence, API, mobile dashboard, and interactive calibration/configuration flow are implemented on the current feature branch. Camera bring-up, real low-light marker tuning, live calibration preview, and Jetson deployment remain hardware-dependent.
+Completed and merged:
 
-See [`docs/design.md`](docs/design.md) for the detailed MVP design and engineering decisions.
+- platform-independent wheel geometry and rotation model
+- partial-distance and direction-reversal accounting
+- marker-loss/uncertainty state machine
+- sessions and exact moving-duration aggregation
+- SQLite statistics/history model
+- reference FastAPI dashboard and browser calibration flow
+- synthetic trajectory testing
+- pixel-level OpenCV vision simulation and regression CI
+- optional Linux/systemd runtime/deployment layer
+
+Primary next step: **Android M0 / #14 — create the Kotlin app and prove CameraX frame analysis on the Motorola phone.**
+
+Jetson-specific camera/runtime issues have been closed as `not planned` for the current roadmap rather than deleted; the implementation and engineering history remain available if that backend is revisited.
+
+See [`docs/design.md`](docs/design.md) for the platform-neutral tracking design and [`docs/android.md`](docs/android.md) for the Android implementation plan.

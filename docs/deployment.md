@@ -1,5 +1,7 @@
 # Jetson Runtime and Deployment
 
+> **Roadmap status:** Android is now the primary product/deployment target. This document is preserved for the optional Linux/Jetson backend and for the runtime/deployment work already implemented in PR #12. Jetson hardware validation is deferred and does not block the Android roadmap.
+
 This document covers the persistent service layer. Camera bring-up is intentionally separate so the service can already be developed and tested without Jetson hardware.
 
 ## Jetson Nano compatibility note
@@ -10,7 +12,7 @@ The current project intentionally still declares Python >= 3.8. Therefore **the 
 
 Do not replace `/usr/bin/python3` on a Jetson simply to satisfy this project. NVIDIA camera/OpenCV/GStreamer packages can depend on the system Python ABI. The installer checks the selected interpreter and stops before changing the system when it is too old.
 
-Once the physical Nano is available, first record:
+If Jetson support is revisited, first record:
 
 ```bash
 python3 --version
@@ -141,7 +143,7 @@ systemctl is-enabled hamster-wheel-tracker
 systemctl is-active hamster-wheel-tracker
 ```
 
-Both should report the expected enabled/active state once the Jetson deployment has been validated on real hardware.
+Both should report the expected enabled/active state once a compatible Linux/Jetson deployment has been validated on real hardware.
 
 ## Dashboard and health
 
@@ -154,7 +156,7 @@ With the default environment, the service binds to:
 From a phone on the same trusted LAN, open:
 
 ```text
-http://<jetson-ip>:8000
+http://<host-ip>:8000
 ```
 
 Basic process/API health:
@@ -164,7 +166,7 @@ curl http://127.0.0.1:8000/api/health
 curl http://127.0.0.1:8000/api/status
 ```
 
-Until camera integration is implemented, the web service intentionally starts in a degraded hardware-independent state and reports that the camera is not configured. This lets configuration, history, dashboard, and deployment remain testable.
+Without camera integration, the web service intentionally starts in a degraded hardware-independent state and reports that the camera is not configured. This keeps the Python configuration, history, dashboard, and deployment path useful as reference/debug tooling.
 
 ## Updating code
 
@@ -203,15 +205,17 @@ sudo systemctl start hamster-wheel-tracker
 
 ## Network note
 
-The MVP has no authentication layer. Binding to `0.0.0.0` is intended for a trusted home LAN only. Do not expose port 8000 directly to the public internet. Remote access should later be placed behind a VPN or authenticated reverse proxy if needed.
+The reference web backend has no authentication layer. Binding to `0.0.0.0` is intended for a trusted home LAN only. Do not expose port 8000 directly to the public internet.
 
-## Hardware validation still required
+## Deferred hardware validation
 
-These deployment pieces are testable in CI, but the following acceptance checks require the actual Jetson Nano:
+These checks are intentionally deferred while Android is the primary roadmap:
 
-- choose/validate the Python strategy for its actual JetPack image,
-- service starts after a physical reboot,
-- the eventual CSI camera worker can access the camera under the systemd user,
-- low-light capture remains stable overnight,
-- dashboard is reachable from the phone on the real LAN,
-- restart/recovery behavior works after deliberately killing the tracker process.
+- choose/validate the Python strategy for the actual JetPack image
+- service starts after a physical reboot
+- CSI camera worker can access the camera under the systemd user
+- low-light capture remains stable overnight
+- dashboard is reachable from the real LAN
+- restart/recovery works after deliberately killing the tracker process
+
+The old Jetson-specific issues were closed as `not planned`, not because this runtime code is invalid, but because those checks no longer block the product.
