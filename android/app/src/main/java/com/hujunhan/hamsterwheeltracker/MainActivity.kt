@@ -26,12 +26,17 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.hujunhan.hamsterwheeltracker.camera.AnalysisStats
 import com.hujunhan.hamsterwheeltracker.camera.CameraFrameAnalyzer
+import com.hujunhan.hamsterwheeltracker.persistence.TrackingDatabase
+import com.hujunhan.hamsterwheeltracker.persistence.TrackingRecorder
 import com.hujunhan.hamsterwheeltracker.tracking.TrackerSnapshot
 import com.hujunhan.hamsterwheeltracker.ui.DetectionOverlayView
 import com.hujunhan.hamsterwheeltracker.vision.CalibrationConfig
 import com.hujunhan.hamsterwheeltracker.vision.CalibrationStore
 import com.hujunhan.hamsterwheeltracker.vision.HsvSample
 import com.hujunhan.hamsterwheeltracker.vision.MarkerFrameResult
+import com.hujunhan.hamsterwheeltracker.web.DashboardServer
+import com.hujunhan.hamsterwheeltracker.web.LanAddress
+import fi.iki.elonen.NanoHTTPD
 import org.opencv.android.OpenCVLoader
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -45,11 +50,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var detectionView: TextView
     private lateinit var trackingView: TextView
     private lateinit var calibrationView: TextView
+    private lateinit var dashboardView: TextView
     private lateinit var toggleButton: Button
 
     private lateinit var analysisExecutor: ExecutorService
     private lateinit var frameAnalyzer: CameraFrameAnalyzer
     private lateinit var calibrationStore: CalibrationStore
+    private lateinit var trackingRecorder: TrackingRecorder
+    private var dashboardServer: DashboardServer? = null
     private var calibration = CalibrationConfig()
     private var analysisEnabled = true
     private var cameraProvider: ProcessCameraProvider? = null
@@ -79,6 +87,10 @@ class MainActivity : ComponentActivity() {
         calibration = calibrationStore.load()
         renderCalibration()
 
+        val database = TrackingDatabase.get(applicationContext)
+        trackingRecorder = TrackingRecorder(database.trackingDao())
+        startDashboard(database.trackingDao())
+
         val openCvReady = try {
             OpenCVLoader.initDebug()
         } catch (error: Throwable) {
@@ -104,6 +116,7 @@ class MainActivity : ComponentActivity() {
                 }
             },
             onTrackerSnapshot = { snapshot ->
+                trackingRecorder.record(snapshot)
                 trackerUiCounter++
                 if (trackerUiCounter % 6 == 0) {
                     runOnUiThread { renderTracking(snapshot) }
@@ -114,6 +127,27 @@ class MainActivity : ComponentActivity() {
         )
 
         requestCameraOrStart()
+    }
+
+    private fun startDashboard(dao: com.hujunhan.hamsterwheeltracker.persistence.TrackingDao) {
+        val server = DashboardServer(
+            dao = dao,
+            liveProvider = { trackingRecorder.latest() },
+        )
+        dashboardServer = server
+        val startError = runCatching {
+            server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+        }.exceptionOrNull()
+        dashboardView.text = if (startError == null) {
+            val url = LanAddress.dashboardUrl(DashboardServer.DEFAULT_PORT)
+            if (url == null) {
+                "Dashboard: running on port ${DashboardServer.DEFAULT_PORT}; connect this phone to Wi-Fi to get a LAN address"
+            } else {
+                "Dashboard: $url · open this address from another phone on the same Wi-Fi"
+            }
+        } else {
+            "Dashboard failed to start: ${startError.message ?: startError.javaClass.simpleName}"
+        }
     }
 
     private fun buildUi() {
@@ -169,11 +203,13 @@ class MainActivity : ComponentActivity() {
         detectionView = textView(Color.WHITE, 14f, "Marker: waiting…")
         trackingView = textView(Color.WHITE, 14f, "Tracker: waiting for marker…")
         calibrationView = textView(Color.LTGRAY, 12f, "Calibration loading…")
+        dashboardView = textView(Color.CYAN, 12f, "Dashboard starting…")
         panel.addView(statusView)
         panel.addView(statsView)
         panel.addView(detectionView)
         panel.addView(trackingView)
         panel.addView(calibrationView)
+        panel.addView(dashboardView)
 
         toggleButton = Button(this).apply {
             text = "Pause analysis"
@@ -451,6 +487,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         cameraProvider?.unbindAll()
+        dashboardServer?.stop()
+        if (::trackingRecorder.isInitialized) trackingRecorder.close()
         if (::frameAnalyzer.isInitialized) frameAnalyzer.close()
         if (::analysisExecutor.isInitialized) analysisExecutor.shutdown()
         super.onDestroy()
