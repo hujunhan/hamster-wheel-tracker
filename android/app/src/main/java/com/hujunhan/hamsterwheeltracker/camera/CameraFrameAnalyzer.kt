@@ -54,7 +54,7 @@ class CameraFrameAnalyzer(
             onMarkerFrame(result)
 
             sampleRequest.getAndSet(null)?.let { request ->
-                markerDetector.hsvAt(request.xPx, request.yPx)?.let(onHsvSample)
+                markerDetector.hsvPatchAt(request.xPx, request.yPx)?.let(onHsvSample)
             }
         } catch (error: Exception) {
             onVisionError(error.message ?: error.javaClass.simpleName)
