@@ -16,12 +16,26 @@ class CalibrationConfigTest {
     }
 
     @Test
-    fun `marker sample creates practical hsv bounds`() {
-        val sampled = CalibrationConfig().withMarkerSample(h = 62, s = 210, v = 180)
+    fun `marker patch sample creates practical hsv bounds`() {
+        val sampled = CalibrationConfig().withMarkerSample(
+            HsvSample(h = 62, s = 210, v = 180, sampleCount = 121),
+        )
 
-        assertEquals(50, sampled.hsvLowerH)
-        assertEquals(74, sampled.hsvUpperH)
-        assertEquals(130, sampled.hsvLowerS)
-        assertEquals(100, sampled.hsvLowerV)
+        assertEquals(47, sampled.hsvLowerH)
+        assertEquals(77, sampled.hsvUpperH)
+        assertEquals(150, sampled.hsvLowerS)
+        assertEquals(120, sampled.hsvLowerV)
+    }
+
+    @Test
+    fun `low saturation teal sample remains detectable`() {
+        val sampled = CalibrationConfig().withMarkerSample(
+            HsvSample(h = 96, s = 16, v = 78, sampleCount = 121),
+        )
+
+        assertEquals(81, sampled.hsvLowerH)
+        assertEquals(111, sampled.hsvUpperH)
+        assertEquals(25, sampled.hsvLowerS)
+        assertEquals(20, sampled.hsvLowerV)
     }
 }
