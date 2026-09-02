@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+import math
 from typing import Optional
 
 from hamster_tracker.storage.aggregation import ActivityAggregator
@@ -51,6 +52,7 @@ class TrackerEngine:
         self._last_seen_ts: Optional[float] = None
         self._last_update_ts: Optional[float] = None
         self._last_speed_m_s = 0.0
+        self._last_angular_velocity_rad_s = 0.0
         self._last_reason = "not_initialized"
         self._last_quality: Optional[float] = None
 
@@ -66,8 +68,13 @@ class TrackerEngine:
             self._last_seen_ts is not None
             and timestamp - self._last_seen_ts > self.max_short_gap_s
         )
+        had_phase_ambiguous_gap = self._phase_gap_is_ambiguous(timestamp)
 
-        if self.state in (TrackingState.SEARCHING, TrackingState.UNCERTAIN) or had_long_gap:
+        if (
+            self.state in (TrackingState.SEARCHING, TrackingState.UNCERTAIN)
+            or had_long_gap
+            or had_phase_ambiguous_gap
+        ):
             sample = self.rotation.reinitialize_phase(x_px, y_px, timestamp)
             self.state = TrackingState.TRACKING
         else:
@@ -77,6 +84,9 @@ class TrackerEngine:
         self._last_seen_ts = timestamp
         self._last_quality = detection_quality
         self._last_speed_m_s = sample.speed_m_s if sample.accepted else 0.0
+        self._last_angular_velocity_rad_s = (
+            sample.angular_velocity_rad_s if sample.accepted else 0.0
+        )
         self._last_reason = sample.reason
         self._consume_motion(timestamp, sample, detection_quality)
         self._last_update_ts = timestamp
@@ -90,7 +100,7 @@ class TrackerEngine:
             gap = timestamp - self._last_seen_ts
             self.state = (
                 TrackingState.PREDICTING
-                if gap <= self.max_short_gap_s
+                if gap <= self.max_short_gap_s and not self._phase_gap_is_ambiguous(timestamp)
                 else TrackingState.UNCERTAIN
             )
 
@@ -175,6 +185,13 @@ class TrackerEngine:
         )
         if emitted is not None and self.database is not None:
             self.database.insert_activity(emitted)
+
+    def _phase_gap_is_ambiguous(self, timestamp: float) -> bool:
+        if self._last_seen_ts is None or self._last_angular_velocity_rad_s == 0.0:
+            return False
+        gap = max(0.0, timestamp - self._last_seen_ts)
+        projected_travel = abs(self._last_angular_velocity_rad_s) * gap
+        return projected_travel >= math.pi
 
     def _check_timestamp(self, timestamp: float) -> None:
         if self._last_update_ts is not None and timestamp < self._last_update_ts:
