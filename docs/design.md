@@ -1,36 +1,79 @@
-# MVP Design
+# Hamster Wheel Tracker Design
 
 ## 1. Product Definition
 
-Hamster Wheel Tracker is a local, camera-based activity monitor for a fixed hamster wheel. A Jetson Nano continuously watches a colored wheel marker, converts marker motion into wheel rotation, derives activity metrics, stores them locally, and serves a mobile-friendly dashboard over the home LAN.
+Hamster Wheel Tracker is a local, camera-based activity monitor for a fixed hamster wheel. A camera observes a colored wheel marker, the tracker converts marker motion into wheel rotation, activity metrics are stored locally, and the user can inspect current and historical activity.
 
-The MVP optimizes for:
+The primary product platform is now **Android**. The existing Python implementation remains the reference/simulation stack, and Linux/Jetson support is optional/deferred.
 
-1. Reliable overnight use
-2. Simple physical setup
-3. Explainable classical CV
-4. Low compute/storage requirements
-5. Clean architecture suitable for future extension
+The design optimizes for:
 
-The MVP does not require hamster detection, pose estimation, object detection, neural networks, or video recording.
+1. reliable overnight use
+2. simple physical setup
+3. explainable classical computer vision
+4. low compute/storage requirements
+5. explicit uncertainty rather than fabricated precision
+6. deterministic behavior that can be validated across implementations
 
-## 2. Physical Geometry
+The MVP does not require hamster detection, pose estimation, object detection, neural networks, cloud services, or video recording.
 
-### 2.1 Camera Placement
+## 2. Platform Boundaries
+
+The tracker should be split at the frame/observation boundary rather than around a specific operating system.
+
+```text
+FrameSource
+   -> MarkerDetector
+   -> marker observation / missing marker
+   -> TrackerCore
+   -> activity/session events
+   -> Storage
+   -> Product UI
+```
+
+### Android product
+
+```text
+CameraX / Camera2
+   -> Android frame analyzer
+   -> marker detector
+   -> tracker core
+   -> Room / SQLite
+   -> foreground tracking service
+   -> native dashboard / calibration UI
+```
+
+### Python reference stack
+
+```text
+synthetic frames / trajectories
+   -> OpenCV marker detector
+   -> TrackerEngine
+   -> SQLite
+   -> FastAPI reference/debug UI
+```
+
+The Python stack is an active behavioral oracle. Android should match its defined tracking semantics through shared deterministic test cases rather than reinterpreting the math independently.
+
+## 3. Physical Geometry
+
+### 3.1 Camera placement
 
 The camera should face the circular side of the wheel as close to head-on as practical.
 
 Desired geometry:
 
-- camera optical axis approximately parallel to wheel rotation axis
-- wheel plane approximately parallel to image plane
-- wheel center near image center
+- camera optical axis approximately parallel to the wheel rotation axis
+- wheel plane approximately parallel to the image plane
 - complete wheel visible with margin
-- wheel diameter occupies approximately 70-80% of image height
+- wheel center reasonably near the frame center
+- wheel diameter occupies most of the analysis frame
 
-This keeps circular wheel motion close to circular image motion and minimizes the need for perspective correction.
+This keeps circular wheel motion close to circular image motion and minimizes perspective correction.
 
-### 2.2 Marker Placement
+The Android product should analyze a practical downscaled stream rather than the phone's full sensor resolution unless higher resolution is shown to improve centroid stability.
+
+### 3.2 Marker placement
 
 Recommended marker-center radius:
 
@@ -38,52 +81,57 @@ Recommended marker-center radius:
 r_marker ~= 0.75 * R_wheel
 ```
 
+A practical working range is roughly `0.70–0.85 R`.
+
 Reasoning:
 
-- farther from the center gives better angular sensitivity for a given centroid error
-- very near the outer rim increases risk of clipping, occlusion, distortion, and mechanical interference
-- approximately 0.70-0.85 R is a practical working range
+- farther from the center improves angular sensitivity for a given centroid error
+- very near the rim increases clipping/occlusion/distortion risk
+- the marker should remain inaccessible to the hamster when possible
 
-The marker should be high saturation and visually distinct under actual nighttime lighting.
+The marker should be high saturation and visually distinct under the actual nighttime lighting.
 
-## 3. Calibration Model
+## 4. Calibration Model
 
 Store at least:
 
 ```text
 wheel_center_px: (cx, cy)
 wheel_radius_px: R_px
-marker_radius_px: r_marker_px
-marker_radius_tolerance_px
+marker_radius_ratio
+marker_radius_tolerance_ratio
 marker_hsv_lower
 marker_hsv_upper
 wheel_effective_diameter_mm
-roi
+optional ROI / frame metadata
 ```
 
-The calibration UI should allow the user to:
+The product calibration UI should allow the user to:
 
-1. inspect a live camera frame
-2. click wheel center
-3. click wheel edge
-4. click/sample marker color
-5. see the expected marker annulus
-6. preview accepted/rejected marker detections
-7. save calibration
+1. inspect the live camera frame
+2. select the wheel center
+3. select the wheel edge/radius
+4. select/sample the marker color
+5. see the valid marker annulus
+6. preview accepted/rejected marker candidates
+7. inspect detection quality/state
+8. save calibration persistently
 
-Calibration is done under lighting representative of normal nighttime operation.
+Calibration should be performed under lighting representative of normal nighttime operation.
 
-## 4. Marker Detection
+The existing FastAPI/browser calibration page remains a useful interaction/reference prototype; Android will provide the primary native calibration flow.
+
+## 5. Marker Detection
 
 Initial detector:
 
-1. crop wheel ROI
-2. convert BGR/RGB frame to HSV
+1. obtain/crop the calibrated wheel region
+2. convert the analysis frame to HSV
 3. threshold within calibrated HSV bounds
-4. apply small morphology operations if needed
+4. apply small morphology operations if useful
 5. find connected components / contours
 6. score candidates
-7. select best valid marker
+7. select the best valid marker
 
 Candidate filters may include:
 
@@ -91,11 +139,13 @@ Candidate filters may include:
 - distance from calibrated wheel center
 - expected annulus membership
 - optional circularity / compactness
-- temporal proximity to predicted location
+- temporal proximity to recent trusted motion
 
-The annulus constraint is especially valuable because a color match elsewhere in the cage should not be treated as the wheel marker.
+The annulus constraint is particularly important: a similar-colored object elsewhere in the cage should not become the wheel marker.
 
-## 5. Angular Tracking
+The detector must be allowed to return **no marker**. It should never fabricate a centroid merely to keep the tracker alive.
+
+## 6. Angular Tracking
 
 For a detected marker centroid `(mx, my)`:
 
@@ -103,19 +153,19 @@ For a detected marker centroid `(mx, my)`:
 theta_t = atan2(my - cy, mx - cx)
 ```
 
-Raw angle is periodic in `[-pi, pi]`, so consecutive observations require local phase unwrapping.
+Raw angle is periodic in `[-pi, pi]`, so consecutive trusted observations require local phase unwrapping.
 
-For consecutive trusted observations:
+For ordinary consecutive observations:
 
 ```text
 delta_theta = wrapped_shortest_difference(theta_t, theta_prev)
 ```
 
-The tracker should reject implausible jumps using a maximum angular velocity / acceleration model rather than blindly accepting every unwrap.
+The tracker rejects implausible motion using configured angular-speed limits.
 
-### 5.1 Partial Rotations
+### 6.1 Partial rotations
 
-The tracker never waits for a complete revolution. Every valid incremental angle contributes immediately.
+The tracker never waits for a complete revolution. Every trusted incremental angle contributes immediately.
 
 Example:
 
@@ -123,11 +173,11 @@ Example:
 0 deg -> 90 deg
 ```
 
-represents one quarter of a revolution and contributes one quarter of the corresponding wheel travel.
+is 0.25 equivalent revolutions and contributes one quarter of the corresponding wheel travel.
 
-### 5.2 Distance vs Net Rotation
+### 6.2 Distance vs net rotation
 
-Two distinct quantities are useful:
+Two distinct values are useful:
 
 ```text
 net_angle = sum(delta_theta)
@@ -140,27 +190,70 @@ Running distance uses total angular travel:
 distance = effective_running_radius * total_angular_travel
 ```
 
-Equivalent revolutions can be defined as:
+Equivalent revolutions:
 
 ```text
 equivalent_revolutions = total_angular_travel / (2*pi)
 ```
 
-This preserves partial turns and direction reversals.
+Forward/backward motion therefore does not cancel physical running distance.
 
-## 6. Effective Wheel Radius
+## 7. Phase Ambiguity and Marker Loss
+
+Tracking states:
+
+```text
+SEARCHING
+TRACKING
+PREDICTING
+UNCERTAIN
+```
+
+### SEARCHING
+
+No trusted marker history. A valid detection initializes observable phase without adding distance.
+
+### TRACKING
+
+Marker is visible and passes geometry/motion checks. Incremental motion is accumulated.
+
+### PREDICTING
+
+Marker disappears briefly. Preserve recent phase only while reacquisition remains unambiguous.
+
+### UNCERTAIN
+
+The gap is too long, the projected hidden motion can cross a phase ambiguity boundary, or a candidate is otherwise unsafe. When the marker is confidently seen again, reinitialize observable phase **without adding guessed hidden distance**.
+
+### 7.1 High-speed short-gap rule
+
+A short wall-clock gap is not automatically safe.
+
+The synthetic pixel-level pipeline exposed the case where a 5 rev/s wheel at 30 FPS loses only a few frames. The true marker displacement can exceed `pi` radians, while the shortest wrapped angle points in the wrong direction.
+
+Therefore the tracker uses recent accepted angular velocity to detect when projected hidden phase travel reaches the half-turn ambiguity boundary. Such a gap becomes `UNCERTAIN` even if it is shorter than the nominal short-gap timeout.
+
+Core principle:
+
+> Prefer explicit undercounting of an ambiguous hidden interval over silently inventing a backward or extra revolution.
+
+## 8. Effective Wheel Radius
 
 The nominal wheel diameter is 9 inches / 228.6 mm.
 
-For MVP configuration we can start with:
+Initial configuration:
 
 ```text
 nominal_diameter_mm = 228.6
 ```
 
-However, physical running distance is more accurately related to the hamster's effective running path than to an arbitrary plastic edge. Therefore the design should call this a configurable `effective_running_diameter_mm` and allow later measurement/calibration.
+Physical running distance is more accurately related to the hamster's effective running path than to an arbitrary plastic edge, so the product stores a configurable:
 
-## 7. Speed Estimation
+```text
+effective_running_diameter_mm
+```
+
+## 9. Speed Estimation
 
 Instantaneous angular velocity:
 
@@ -174,58 +267,24 @@ Linear speed:
 v = abs(omega) * effective_running_radius
 ```
 
-Raw frame-to-frame speed can be noisy. The MVP should support a short temporal smoother such as:
+Raw frame-to-frame speed can be noisy. Product-facing speed should use a short smoother such as a median window or EMA.
 
-- median over recent samples, or
-- short EMA
+**Filtering must not change accumulated distance.** Distance remains based on raw accepted angular increments.
 
-Filtering must not be applied in a way that changes accumulated distance.
+## 10. Running State and Sessions
 
-## 8. Marker Loss / Occlusion
+Use speed thresholds plus hysteresis.
 
-Tracking states:
-
-```text
-SEARCHING
-TRACKING
-PREDICTING
-UNCERTAIN
-```
-
-Suggested behavior:
-
-### SEARCHING
-
-No trusted marker history. Detect a marker candidate and initialize state.
-
-### TRACKING
-
-Marker is visible and passes geometry / motion checks. Accumulate angle and motion.
-
-### PREDICTING
-
-Marker disappears briefly. Preserve the recent phase relationship for a short, configurable interval. If the marker reappears quickly enough that the incremental angle remains unambiguous, continue tracking normally.
-
-### UNCERTAIN
-
-Gap is too long or reacquisition is ambiguous. When a marker is confidently seen again, reinitialize the observable wheel phase **without adding guessed distance** for the hidden interval.
-
-A core principle is: **prefer undercounting an ambiguous interval over silently inventing multiple revolutions.**
-
-## 9. Running State and Sessions
-
-Define `running` using speed thresholds and hysteresis.
-
-Example conceptual thresholds:
+Conceptually:
 
 ```text
 start_running if speed > start_threshold
 stop_running if speed < stop_threshold for T seconds
 ```
 
-A session is a logical burst of activity. Short pauses should not necessarily split sessions.
+A session is a logical burst of activity. Short pauses do not necessarily split sessions.
 
-Initial configurable session gap:
+Initial session-gap default:
 
 ```text
 session_gap_seconds ~= 10
@@ -241,19 +300,17 @@ Per-session statistics:
 - equivalent revolutions
 - average moving speed
 - maximum speed
-- forward / backward travel if stable
+- optional forward/backward travel when stable
 
-`moving_duration` is based on observed wheel motion rather than the full hysteresis window, so a pause does not inflate average-speed calculations.
+`moving_duration` is based on observed wheel motion rather than the full hysteresis window.
 
-## 10. Storage Model
+## 11. Storage Model
 
-Do not persist every video frame.
+Do not persist video frames or per-frame records by default.
 
-Tracker operates at camera frame rate, while storage uses aggregation intervals (initially 1 second).
+Tracking runs at camera frame rate; storage uses aggregated samples (initially approximately 1 second).
 
-Suggested tables:
-
-### activity_samples
+### activity samples
 
 ```text
 timestamp
@@ -267,8 +324,6 @@ running
 detection_quality
 tracking_state
 ```
-
-`moving_duration_s` preserves sub-second activity. For example, if the hamster moves for 0.3 seconds inside a 1-second storage bucket, the database stores 0.3 seconds rather than rounding the bucket up to a full second.
 
 ### sessions
 
@@ -284,10 +339,13 @@ avg_speed_m_s
 max_speed_m_s
 ```
 
-### daily stats
+### reporting-night summary
+
+The current reporting window is local `18:00 -> 18:00 next day`, so normal overnight hamster activity is not split at midnight.
+
+Summary fields include:
 
 ```text
-date
 distance_m
 moving_duration_s
 equivalent_revolutions
@@ -295,162 +353,182 @@ avg_speed_m_s
 max_speed_m_s
 longest_session_s
 session_count
+uncertain_duration_s
 ```
 
-SQLite is sufficient for MVP scale.
+Android will use Room/SQLite. The Python reference implementation uses SQLite directly. Query semantics should remain equivalent where practical.
 
-## 11. Tracker Engine
+## 12. Tracker Core Boundary
 
-The hardware-independent `TrackerEngine` is the integration boundary between a marker source and the statistics/storage system.
-
-Conceptually:
+The important platform-independent interface is conceptually:
 
 ```text
-marker observation / missing marker
-        -> TrackerEngine
-             -> RotationTracker
-             -> tracking state machine
-             -> SessionTracker
-             -> 1 s ActivityAggregator
-             -> SQLite
+process_marker(timestamp, x, y, quality)
+process_missing(timestamp)
+     -> snapshot / activity / session updates
 ```
 
-The eventual camera loop should only need to provide timestamps plus either a trusted marker centroid or a missing-marker event. This keeps camera/Jetson details outside the core motion logic.
+The core owns:
 
-## 12. Synthetic Development Path
+- wheel-angle math
+- partial distance
+- direction reversal semantics
+- plausibility checks
+- phase/occlusion state
+- session behavior
+- aggregation semantics
 
-Before camera hardware is available, the same engine can be driven by synthetic trajectories.
+Camera lifecycle, Android service state, persistence framework, and UI should stay outside this boundary.
 
-The synthetic generator supports piecewise motion segments with:
+### Preferred Android implementation
+
+The preferred initial direction is:
+
+- Kotlin for CameraX/Camera2, foreground service, Room, and UI
+- C++17/JNI for reusable/performance-sensitive tracking/vision code where the boundary remains small and testable
+
+This is deliberately not a requirement that every existing Python class be line-for-line ported to C++. Correct behavior and test parity take priority over language purity.
+
+## 13. Synthetic and Cross-Platform Testing
+
+The Python stack supports both coordinate-level trajectories and rendered pixel-level BGR frames.
+
+Synthetic cases include:
 
 - idle periods
 - forward rotation
 - reverse rotation
-- different angular speeds
+- multiple angular speeds
 - centroid jitter
+- brightness changes
+- blur/noise
+- same-color distractors
 - short marker occlusion
 - long ambiguous occlusion
+- high-speed phase ambiguity
 
-A demo scenario passes these observations through the production rotation/session/aggregation/database path. This makes the mathematical and persistence layers testable without Jetson hardware.
+Android should consume shared deterministic observations/test vectors and reproduce expected outputs within documented tolerance.
 
-## 13. Web Architecture
+Important parity cases:
 
-Use FastAPI with server-rendered HTML and lightweight JavaScript.
+- quarter revolution
+- clockwise/counterclockwise full revolution
+- `+pi/-pi` crossing
+- forward then backward
+- stationary jitter
+- irregular timestamps
+- implausible jump
+- brief dropped frames
+- high-speed ambiguous gap
+- long marker loss
+- session pause grouping
+- exact moving duration
+- reporting-night aggregation
 
-Suggested endpoints:
+## 14. Android Runtime
 
-```text
-GET /                     dashboard
-GET /calibration          calibration UI
-GET /api/status           current tracker state
-GET /api/today            current-day/night statistics
-GET /api/history          daily history
-GET /api/sessions         session history
-GET /api/camera/frame     calibration/debug frame
-POST /api/calibration     save calibration
-```
+The user explicitly starts tracking from the app.
 
-The UI should be usable from a phone browser on the same LAN.
+While tracking:
 
-## 14. Dashboard MVP
+- camera analysis runs through a camera foreground service
+- a persistent notification communicates active tracking state
+- the UI may be backgrounded or the screen may be off
+- activity is stored continuously in Room/SQLite
 
-Current-night view:
+The implementation must respect current Android foreground-service/camera restrictions instead of assuming Linux-style boot-time daemon behavior.
 
-- total distance
-- running time
+A phone normally remains connected to power during overnight tracking.
+
+## 15. Product UI
+
+Android is the primary product UI.
+
+### Tracking/dashboard
+
+- current running/stopped/tracking state
+- current/display speed
+- current-night distance and moving time
 - equivalent revolutions
-- average speed
-- maximum speed
-- longest session
-- current running/stopped state
-- current speed
-- distance-by-hour chart
+- average/max speed
+- longest session and session count
+- hourly activity/distance
 - speed/activity timeline
+- recent-night history
+- session history
+- explicit uncertainty warnings
 
-History:
+### Calibration/debug
 
-- daily distance
-- daily running time
-- session list
+- live camera preview
+- wheel center/radius selection
+- marker sampling/HSV tuning
+- marker annulus overlay
+- accepted/rejected candidate overlay
+- detector quality/state
 
-## 15. Suggested Package Layout
+The existing FastAPI UI remains a development/reference tool, not the primary product surface.
+
+## 16. Repository Architecture
+
+Current/target roles:
 
 ```text
+android/
+  Android product implementation
+
 src/hamster_tracker/
-  camera/
-    capture.py
-  vision/
-    marker_detector.py
-    geometry.py
-  tracking/
-    rotation_tracker.py
-    motion_filter.py
-    session_tracker.py
-    engine.py
-  storage/
-    aggregation.py
-    database.py
-    models.py
-  sim/
-    trajectory.py
-  web/
-    app.py
-    api.py
-  config.py
+  Python reference implementation
 
 scripts/
-  camera_test.py
-  marker_test.py
-  rotation_test.py
-  simulate_night.py
+  simulations and reference/debug tools
 
 tests/
+  Python reference/regression tests
+
+docs/
+  design and platform documentation
+
+deploy/
+  preserved optional Linux/systemd backend
 ```
 
-Keep modules small and test the geometry/tracking logic independently of real camera hardware.
+Do not move the Python stack to `legacy/`: it remains an active reference and CI target.
 
-## 16. Test Strategy
+## 17. Android Roadmap
 
-The rotation tracker and engine should have synthetic tests before relying on the live camera.
+- #14 — app scaffold + CameraX frame pipeline
+- #15 — real-camera marker detector + calibration
+- #16 — tracker core port + cross-platform parity
+- #17 — foreground service + Room persistence
+- #18 — native dashboard + history
 
-Important cases:
+Jetson-specific open issues were closed as `not planned` for the current roadmap. They may be reopened if Linux/Jetson becomes a useful secondary target.
 
-- clockwise full revolution
-- counterclockwise full revolution
-- quarter revolution only
-- forward then backward motion
-- crossing `+pi/-pi`
-- stationary marker with centroid jitter
-- brief dropped frames
-- implausible marker jump
-- long ambiguous marker loss
-- different frame intervals
-- end-to-end trajectory -> sessions -> SQLite
-- pauses do not inflate moving duration
-- partial storage buckets preserve exact moving time
+## 18. MVP Acceptance Criteria
 
-## 17. MVP Acceptance Criteria
+The Android MVP is successful when:
 
-The MVP is successful when:
+1. the Motorola phone can acquire/analyze the wheel camera continuously under intended lighting
+2. marker detection is stable and calibrated on-device
+3. partial rotations contribute correctly to distance
+4. direction reversals do not cancel physical running distance
+5. short safe gaps do not corrupt rotation count
+6. ambiguous gaps are surfaced rather than guessed
+7. tracking continues through an overnight screen-off foreground-service run after the user starts it
+8. sessions/history persist across process/app restart
+9. calibration can be performed from the Android UI without editing source code
+10. current and historical metrics are usable directly on the phone
+11. Android tracker results match the reference test vectors within documented tolerance
 
-1. Jetson Nano can run the tracker continuously overnight.
-2. Marker is detected reliably under normal nighttime lighting.
-3. Partial wheel rotations contribute correctly to distance.
-4. Direction reversals do not cancel physical running distance.
-5. Short detection gaps do not routinely corrupt rotation count.
-6. Long ambiguous gaps are surfaced rather than silently guessed.
-7. Sessions and daily metrics are stored in SQLite.
-8. A phone on the same LAN can view current and historical metrics.
-9. Calibration can be performed from the browser without editing source code.
-
-## 18. Non-Goals for MVP
+## 19. Non-Goals for MVP
 
 - hamster identity recognition
 - pose estimation
 - behavior classification beyond wheel activity
 - cloud service
-- remote internet access
+- remote public-internet access
 - video archive
-- React frontend
 - CNN / transformer inference
-- multi-wheel support
+- multiple simultaneous wheels
+- automatic boot-time camera tracking that violates Android platform restrictions
