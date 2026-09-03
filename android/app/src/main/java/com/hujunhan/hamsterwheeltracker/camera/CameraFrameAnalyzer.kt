@@ -30,8 +30,8 @@ class CameraFrameAnalyzer(
     private val calibration = AtomicReference(initialCalibration)
     private val sampleRequest = AtomicReference<SampleRequest?>(null)
 
-    @Volatile
-    private var enabled = true
+    @Volatile private var enabled = true
+    @Volatile private var lowPowerAllowed = true
 
     fun setEnabled(value: Boolean) {
         enabled = value
@@ -39,6 +39,18 @@ class CameraFrameAnalyzer(
             stats.reset()
             idleMotionDetector.reset()
             onPowerState(powerController.reset())
+        }
+    }
+
+    /**
+     * Local preview/calibration wants fresh full detector output, so IDLE is only
+     * allowed when no local preview consumer is attached.
+     */
+    fun setLowPowerAllowed(allowed: Boolean) {
+        lowPowerAllowed = allowed
+        if (!allowed) {
+            idleMotionDetector.reset()
+            powerController.forceActive("preview_attached")?.let(onPowerState)
         }
     }
 
@@ -75,16 +87,22 @@ class CameraFrameAnalyzer(
 
             val currentCalibration = calibration.get()
             if (powerController.state.mode == AnalysisPowerMode.IDLE) {
-                // An explicit calibration sample must never wait for wheel motion.
-                if (sampleRequest.get() != null) {
-                    powerController.forceActive("hsv_sample_requested")?.let(onPowerState)
-                } else {
-                    val motion = idleMotionDetector.sample(image, currentCalibration) ?: return
-                    val wake = powerController.onIdleMotion(motion) ?: return
-                    onPowerState(wake)
-                    // Continue through the full pipeline on this same wake frame.
-                    // WheelTracker sees the long gap and reinitializes phase instead
-                    // of inventing distance across the IDLE interval.
+                when {
+                    !lowPowerAllowed -> {
+                        powerController.forceActive("preview_attached")?.let(onPowerState)
+                    }
+                    sampleRequest.get() != null -> {
+                        // An explicit calibration sample must never wait for wheel motion.
+                        powerController.forceActive("hsv_sample_requested")?.let(onPowerState)
+                    }
+                    else -> {
+                        val motion = idleMotionDetector.sample(image, currentCalibration) ?: return
+                        val wake = powerController.onIdleMotion(motion) ?: return
+                        onPowerState(wake)
+                        // Continue through the full pipeline on this same wake frame.
+                        // WheelTracker sees the long gap and reinitializes phase instead
+                        // of inventing distance across the IDLE interval.
+                    }
                 }
             }
 
@@ -110,14 +128,16 @@ class CameraFrameAnalyzer(
             )
             onTrackerSnapshot(trackerSnapshot)
 
-            powerController.onTrackerFrame(timestampNs, trackerSnapshot)?.let { transition ->
-                if (transition.mode == AnalysisPowerMode.IDLE) {
-                    idleMotionDetector.reset()
-                    // Reuse this final ACTIVE frame as the IDLE baseline. This
-                    // keeps wake latency near one 10 Hz motion-check interval.
-                    idleMotionDetector.prime(image, currentCalibration)
+            if (lowPowerAllowed) {
+                powerController.onTrackerFrame(timestampNs, trackerSnapshot)?.let { transition ->
+                    if (transition.mode == AnalysisPowerMode.IDLE) {
+                        idleMotionDetector.reset()
+                        // Reuse this final ACTIVE frame as the IDLE baseline. This
+                        // keeps wake latency near one 10 Hz motion-check interval.
+                        idleMotionDetector.prime(image, currentCalibration)
+                    }
+                    onPowerState(transition)
                 }
-                onPowerState(transition)
             }
 
             sampleRequest.getAndSet(null)?.let { request ->
