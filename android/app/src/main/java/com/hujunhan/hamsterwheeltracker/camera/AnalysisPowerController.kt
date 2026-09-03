@@ -27,6 +27,7 @@ internal class AnalysisPowerController(
     private val idleHoldNs: Long = 20_000_000_000L,
     private val stationarySpeedThresholdMS: Double = 0.003,
 ) {
+    @Volatile
     var state: AnalysisPowerState = AnalysisPowerState(
         mode = AnalysisPowerMode.ACTIVE,
         reason = "starting",
@@ -35,6 +36,7 @@ internal class AnalysisPowerController(
 
     private var stationarySinceNs: Long? = null
 
+    @Synchronized
     fun onTrackerFrame(timestampNs: Long, snapshot: TrackerSnapshot): AnalysisPowerState? {
         if (state.mode != AnalysisPowerMode.ACTIVE) return null
 
@@ -64,6 +66,7 @@ internal class AnalysisPowerController(
         return state
     }
 
+    @Synchronized
     fun onIdleMotion(sample: IdleMotionSample): AnalysisPowerState? {
         if (state.mode != AnalysisPowerMode.IDLE || !sample.motionDetected) return null
         state = AnalysisPowerState(
@@ -76,6 +79,7 @@ internal class AnalysisPowerController(
         return state
     }
 
+    @Synchronized
     fun forceActive(reason: String): AnalysisPowerState? {
         stationarySinceNs = null
         if (state.mode == AnalysisPowerMode.ACTIVE) return null
@@ -86,6 +90,7 @@ internal class AnalysisPowerController(
         return state
     }
 
+    @Synchronized
     fun reset(): AnalysisPowerState {
         stationarySinceNs = null
         state = AnalysisPowerState(
