@@ -19,25 +19,46 @@ class CameraFrameAnalyzer(
     private val onTrackerSnapshot: (TrackerSnapshot) -> Unit,
     private val onHsvSample: (HsvSample) -> Unit,
     private val onVisionError: (String) -> Unit,
+    private val onPowerState: (AnalysisPowerState) -> Unit = {},
 ) : ImageAnalysis.Analyzer {
     private val stats = AnalysisStats()
     private val rgbaReader = RgbaMatReader()
     private val markerDetector = MarkerDetector()
+    private val idleMotionDetector = IdleMotionDetector()
+    private val powerController = AnalysisPowerController()
     private val wheelTracker = WheelTracker(initialCalibration.effectiveDiameterMm.toDouble())
     private val calibration = AtomicReference(initialCalibration)
     private val sampleRequest = AtomicReference<SampleRequest?>(null)
 
-    @Volatile
-    private var enabled = true
+    @Volatile private var enabled = true
+    @Volatile private var lowPowerAllowed = true
 
     fun setEnabled(value: Boolean) {
         enabled = value
-        if (value) stats.reset()
+        if (value) {
+            stats.reset()
+            idleMotionDetector.reset()
+            onPowerState(powerController.reset())
+        }
+    }
+
+    /**
+     * Local preview/calibration wants fresh full detector output, so IDLE is only
+     * allowed when no local preview consumer is attached.
+     */
+    fun setLowPowerAllowed(allowed: Boolean) {
+        lowPowerAllowed = allowed
+        if (!allowed) {
+            idleMotionDetector.reset()
+            powerController.forceActive("preview_attached")?.let(onPowerState)
+        }
     }
 
     fun setCalibration(value: CalibrationConfig) {
         val previous = calibration.getAndSet(value)
         wheelTracker.setEffectiveDiameterMm(value.effectiveDiameterMm.toDouble())
+        idleMotionDetector.reset()
+        powerController.forceActive("calibration_changed")?.let(onPowerState)
         if (
             previous.centerXNorm != value.centerXNorm ||
             previous.centerYNorm != value.centerYNorm
@@ -50,19 +71,41 @@ class CameraFrameAnalyzer(
 
     fun requestHsvSample(xPx: Float, yPx: Float) {
         sampleRequest.set(SampleRequest(xPx, yPx))
+        powerController.forceActive("hsv_sample_requested")?.let(onPowerState)
     }
 
     override fun analyze(image: ImageProxy) {
         try {
             if (!enabled) return
 
+            val timestampNs = image.imageInfo.timestamp
             stats.onFrame(
-                timestampNs = image.imageInfo.timestamp,
+                timestampNs = timestampNs,
                 width = image.width,
                 height = image.height,
             )?.let(onStats)
 
             val currentCalibration = calibration.get()
+            if (powerController.state.mode == AnalysisPowerMode.IDLE) {
+                when {
+                    !lowPowerAllowed -> {
+                        powerController.forceActive("preview_attached")?.let(onPowerState)
+                    }
+                    sampleRequest.get() != null -> {
+                        // An explicit calibration sample must never wait for wheel motion.
+                        powerController.forceActive("hsv_sample_requested")?.let(onPowerState)
+                    }
+                    else -> {
+                        val motion = idleMotionDetector.sample(image, currentCalibration) ?: return
+                        val wake = powerController.onIdleMotion(motion) ?: return
+                        onPowerState(wake)
+                        // Continue through the full pipeline on this same wake frame.
+                        // WheelTracker sees the long gap and reinitializes phase instead
+                        // of inventing distance across the IDLE interval.
+                    }
+                }
+            }
+
             val rgba = rgbaReader.read(image)
             val result = markerDetector
                 .detect(rgba, currentCalibration)
@@ -80,10 +123,22 @@ class CameraFrameAnalyzer(
                 )
             }
             val trackerSnapshot = wheelTracker.process(
-                timestampSec = image.imageInfo.timestamp / 1_000_000_000.0,
+                timestampSec = timestampNs / 1_000_000_000.0,
                 observation = observation,
             )
             onTrackerSnapshot(trackerSnapshot)
+
+            if (lowPowerAllowed) {
+                powerController.onTrackerFrame(timestampNs, trackerSnapshot)?.let { transition ->
+                    if (transition.mode == AnalysisPowerMode.IDLE) {
+                        idleMotionDetector.reset()
+                        // Reuse this final ACTIVE frame as the IDLE baseline. This
+                        // keeps wake latency near one 10 Hz motion-check interval.
+                        idleMotionDetector.prime(image, currentCalibration)
+                    }
+                    onPowerState(transition)
+                }
+            }
 
             sampleRequest.getAndSet(null)?.let { request ->
                 markerDetector.hsvPatchAt(request.xPx, request.yPx)?.let(onHsvSample)

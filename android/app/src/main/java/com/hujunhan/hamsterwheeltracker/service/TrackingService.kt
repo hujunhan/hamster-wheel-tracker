@@ -21,6 +21,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import com.hujunhan.hamsterwheeltracker.MainActivity
+import com.hujunhan.hamsterwheeltracker.camera.AnalysisPowerMode
+import com.hujunhan.hamsterwheeltracker.camera.AnalysisPowerState
 import com.hujunhan.hamsterwheeltracker.camera.AnalysisStats
 import com.hujunhan.hamsterwheeltracker.camera.CameraFrameAnalyzer
 import com.hujunhan.hamsterwheeltracker.persistence.TrackingDatabase
@@ -55,6 +57,8 @@ class TrackingService : LifecycleService() {
         val analysisEnabled: Boolean,
         val message: String,
         val dashboardUrl: String?,
+        val powerMode: AnalysisPowerMode,
+        val powerReason: String,
     )
 
     inner class LocalBinder : Binder() {
@@ -84,6 +88,7 @@ class TrackingService : LifecycleService() {
     @Volatile private var latestStats: AnalysisStats.Snapshot? = null
     @Volatile private var latestMarkerFrame: MarkerFrameResult? = null
     @Volatile private var latestTrackerSnapshot: TrackerSnapshot? = null
+    @Volatile private var latestPowerState = AnalysisPowerState(AnalysisPowerMode.ACTIVE, "starting")
 
     private var lastNotificationUpdateMs = 0L
 
@@ -130,6 +135,8 @@ class TrackingService : LifecycleService() {
         analysisEnabled = analysisEnabled,
         message = serviceMessage,
         dashboardUrl = dashboardUrl,
+        powerMode = latestPowerState.mode,
+        powerReason = latestPowerState.reason,
     )
 
     fun currentCalibration(): CalibrationConfig = calibration
@@ -147,18 +154,20 @@ class TrackingService : LifecycleService() {
     /** Attach/detach the Activity's PreviewView without changing camera ownership. */
     fun attachPreview(surfaceProvider: Preview.SurfaceProvider) {
         previewSurfaceProvider = surfaceProvider
+        if (::frameAnalyzer.isInitialized) frameAnalyzer.setLowPowerAllowed(false)
         previewUseCase?.setSurfaceProvider(surfaceProvider)
     }
 
     fun detachPreview() {
         previewSurfaceProvider = null
         previewUseCase?.setSurfaceProvider(null)
+        if (::frameAnalyzer.isInitialized) frameAnalyzer.setLowPowerAllowed(true)
     }
 
     fun setAnalysisEnabled(enabled: Boolean) {
         analysisEnabled = enabled
+        serviceMessage = if (enabled) "Tracking active · full analysis" else "Tracking service active; analysis paused"
         if (::frameAnalyzer.isInitialized) frameAnalyzer.setEnabled(enabled)
-        serviceMessage = if (enabled) "Tracking active" else "Tracking service active; analysis paused"
         publishState()
         updateNotification(force = true)
     }
@@ -213,7 +222,17 @@ class TrackingService : LifecycleService() {
                 listeners.forEach { it.onVisionError(message) }
                 publishState()
             },
+            onPowerState = { power ->
+                latestPowerState = power
+                serviceMessage = when (power.mode) {
+                    AnalysisPowerMode.ACTIVE -> "Tracking active · full analysis"
+                    AnalysisPowerMode.IDLE -> "Tracking idle · low-power wheel motion watch"
+                }
+                publishState()
+                updateNotification(force = true)
+            },
         )
+        frameAnalyzer.setLowPowerAllowed(previewSurfaceProvider == null)
         frameAnalyzer.setEnabled(analysisEnabled)
 
         acquireWakeLock()
@@ -338,6 +357,12 @@ class TrackingService : LifecycleService() {
         val text = when {
             !tracking -> serviceMessage
             !analysisEnabled -> "Analysis paused"
+            latestPowerState.mode == AnalysisPowerMode.IDLE && snapshot != null -> String.format(
+                Locale.US,
+                "%.2f m · %.2f rev · IDLE low power",
+                snapshot.totalDistanceM,
+                snapshot.equivalentRevolutions,
+            )
             snapshot == null -> serviceMessage
             else -> String.format(
                 Locale.US,
