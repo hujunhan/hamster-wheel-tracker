@@ -154,12 +154,14 @@ class TrackingService : LifecycleService() {
     /** Attach/detach the Activity's PreviewView without changing camera ownership. */
     fun attachPreview(surfaceProvider: Preview.SurfaceProvider) {
         previewSurfaceProvider = surfaceProvider
+        if (::frameAnalyzer.isInitialized) frameAnalyzer.setLowPowerAllowed(false)
         previewUseCase?.setSurfaceProvider(surfaceProvider)
     }
 
     fun detachPreview() {
         previewSurfaceProvider = null
         previewUseCase?.setSurfaceProvider(null)
+        if (::frameAnalyzer.isInitialized) frameAnalyzer.setLowPowerAllowed(true)
     }
 
     fun setAnalysisEnabled(enabled: Boolean) {
@@ -230,6 +232,7 @@ class TrackingService : LifecycleService() {
                 updateNotification(force = true)
             },
         )
+        frameAnalyzer.setLowPowerAllowed(previewSurfaceProvider == null)
         frameAnalyzer.setEnabled(analysisEnabled)
 
         acquireWakeLock()
